@@ -15,6 +15,13 @@ openrouter:
     - "sk-or-v1-your-second-api-key"
     - "sk-or-v1-your-third-api-key"
 
+  # Optional list of model IDs that clients are allowed to use.
+  # When set, the proxy rejects any other model and defaults to the first
+  # entry when a request omits the model field.
+  allowed_models:
+    - "deepseek/deepseek-r1:free"
+    - "openai/text-embedding-3-small"
+
   # Key selection strategy: "round-robin" (default), "first" or "random".
   key_selection_strategy: "round-robin"
   # List of key selection options:
@@ -24,7 +31,8 @@ openrouter:
   # OpenRouter API base URL
   base_url: "https://openrouter.ai/api/v1"
 
-  # Public endpoints that don't require authentication
+  # Public endpoints that don't require authentication.
+  # The proxy normalizes /models, /v1/models, and /api/v1/models to the same route.
   public_endpoints:
     - "/api/v1/models"
 

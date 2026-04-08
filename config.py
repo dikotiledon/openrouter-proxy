@@ -100,6 +100,25 @@ def normalize_and_validate_config(config_data: Dict[str, Any]):
             "Proxy will not work for authenticated endpoints."
         )
 
+    if "allowed_models" in openrouter_config and openrouter_config["allowed_models"] is None:
+        openrouter_config["allowed_models"] = []
+    if not isinstance(openrouter_config.get("allowed_models"), list):
+        logger.warning("'openrouter.allowed_models' missing or invalid in config.yml. Using empty list.")
+        openrouter_config["allowed_models"] = []
+    else:
+        validated_models = []
+        for i, model_name in enumerate(openrouter_config["allowed_models"]):
+            if not isinstance(model_name, str):
+                logger.warning("Item %d in 'openrouter.allowed_models' is not a string. Skipping.", i)
+                continue
+            normalized_model = model_name.strip()
+            if not normalized_model:
+                logger.warning("Item %d in 'openrouter.allowed_models' is empty. Skipping.", i)
+                continue
+            if normalized_model not in validated_models:
+                validated_models.append(normalized_model)
+        openrouter_config["allowed_models"] = validated_models
+
     def_key_selection_strategy = "round-robin"
     if (not isinstance(key_selection_strategy := openrouter_config.get("key_selection_strategy"), str) or
             key_selection_strategy not in ["round-robin", "first", "random"]):

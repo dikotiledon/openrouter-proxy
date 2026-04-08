@@ -9,7 +9,8 @@ CONFIG_FILE = "config.yml"
 # Rate limit error code
 RATE_LIMIT_ERROR_CODE = 429
 
-MODELS_ENDPOINTS = ["/api/v1/models"]
+# Canonical OpenAI-style model listing paths.
+MODELS_ENDPOINTS = ["/models"]
 
 GLOBAL_LIMIT_PATTERN = "is temporarily rate-limited upstream"
 
