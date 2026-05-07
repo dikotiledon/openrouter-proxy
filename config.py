@@ -66,7 +66,9 @@ def normalize_and_validate_config(config_data: Dict[str, Any]):
     openrouter_config["base_url"] = openrouter_config["base_url"].rstrip("/")
 
     default_public_endpoints = ["/api/v1/models"]
-    if "public_endpoints" in openrouter_config and openrouter_config["public_endpoints"] is None:
+    if "public_endpoints" not in openrouter_config:
+        openrouter_config["public_endpoints"] = default_public_endpoints
+    elif openrouter_config["public_endpoints"] is None:
         openrouter_config["public_endpoints"] = []
     if not isinstance(openrouter_config["public_endpoints"], list):
         logger.warning(

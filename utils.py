@@ -3,9 +3,9 @@
 Utility functions for OpenRouter API Proxy.
 """
 
-import asyncio
 import json
 import socket
+import time
 from typing import Optional, Tuple
 
 from fastapi import Header, HTTPException
@@ -104,7 +104,7 @@ def check_google_error(data: str) -> Optional[str]:
     return None
 
 
-async def check_rate_limit(data: str or bytes) -> Tuple[bool, Optional[int]]:
+async def check_rate_limit(data: str | bytes) -> Tuple[bool, Optional[int]]:
     """
     Check for rate limit error.
 
@@ -129,9 +129,11 @@ async def check_rate_limit(data: str or bytes) -> Tuple[bool, Optional[int]]:
                 if code == RATE_LIMIT_ERROR_CODE and (raw := err["error"].get("metadata", {}).get("raw", "")):
                     issue = check_global_limit(raw) or check_google_error(raw)
                     if issue:
-                        if config["openrouter"]["global_rate_delay"]:
-                            logger.info("%s, waiting %s seconds.", issue, config["openrouter"]["global_rate_delay"])
-                            await asyncio.sleep(config["openrouter"]["global_rate_delay"])
+                        delay_seconds = config["openrouter"].get("global_rate_delay", 0) or 0
+                        if delay_seconds > 0:
+                            reset_time_ms = int((time.time() + delay_seconds) * 1000)
+                            logger.info("%s, applying %s second cooldown.", issue, delay_seconds)
+                            return True, reset_time_ms
                         return False, None
                 x_rate_limit = 0
 

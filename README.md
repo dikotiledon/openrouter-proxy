@@ -11,7 +11,7 @@ by rotating through multiple API keys in a round-robin fashion.
 - Proxies OpenAI embeddings requests directly to OpenRouter's embeddings endpoint
 - Enforces an optional `allowed_models` list so clients can only use configured models
 - Filters `/models` to the configured allowlist and free-only policy
-- Passes OpenRouter sampling parameters, reasoning settings, and tool-calling fields through unchanged
+- Passes OpenRouter prompt-caching controls, reasoning settings, sampling parameters, and tool-calling fields through unchanged
 - Rotates multiple API keys to bypass rate limits
 - Automatically disables API keys temporarily when rate limits are reached
 - Streams responses chunk by chunk for efficient data transfer
@@ -165,9 +165,75 @@ The proxy does not emulate tool calling locally. It forwards OpenRouter-compatib
 Notes:
 
 - `tool_choice` is passed through as OpenRouter accepts it (`auto`, `none`, or a forced function tool).
-- OpenRouter-specific fields such as `models`, `provider`, and `plugins` also flow through because the proxy forwards the JSON body unchanged.
+- OpenRouter-specific fields such as `cache_control`, `models`, `provider`, `plugins`, `reasoning`, and `reasoning_details` also flow through because the proxy forwards the JSON body unchanged.
 - The proxy does not run tools. Your application still needs to execute the function and send the result back in a follow-up request when the flow requires it.
 - If the chosen model does not support tools, OpenRouter may ignore or reject the request.
+
+### Prompt Caching
+
+The proxy does not implement caching locally. It forwards OpenRouter prompt-caching controls unchanged, including top-level `cache_control` on supported requests and per-block `cache_control` breakpoints inside message content.
+
+That means OpenRouter can apply provider sticky routing upstream, and the proxy will preserve the request body needed for cache hits.
+
+Example with an OpenAI-compatible client:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+  base_url="http://localhost:5555/v1",
+  api_key="your_local_access_key_here",
+)
+
+response = client.chat.completions.create(
+  model="anthropic/claude-sonnet-4.6",
+  messages=[
+    {
+      "role": "system",
+      "content": [
+        {"type": "text", "text": "Use the reference below when answering."},
+        {
+          "type": "text",
+          "text": "HUGE STABLE REFERENCE TEXT",
+          "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        },
+      ],
+    },
+    {"role": "user", "content": "Summarize the reference."},
+  ],
+  extra_body={"cache_control": {"type": "ephemeral", "ttl": "1h"}},
+)
+```
+
+### Reasoning Tokens
+
+The proxy also forwards OpenRouter reasoning controls unchanged. Use the unified `reasoning` object for modern requests, and the proxy will preserve returned `reasoning` and `reasoning_details` blocks in both streaming and non-streaming responses.
+
+Legacy `include_reasoning` still passes through, but `reasoning` is the preferred interface.
+
+Example with reasoning enabled:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+  base_url="http://localhost:5555/v1",
+  api_key="your_local_access_key_here",
+)
+
+response = client.chat.completions.create(
+  model="openai/o3-mini",
+  messages=[{"role": "user", "content": "Explain quantum computing in simple terms."}],
+  extra_body={"reasoning": {"effort": "high", "exclude": False}},
+)
+
+message = response.choices[0].message
+print(getattr(message, "reasoning", None))
+print(getattr(message, "reasoning_details", None))
+print(getattr(message, "content", None))
+```
+
+If you replay an assistant turn that contains `reasoning_details`, keep that field unchanged so the reasoning context remains valid for follow-up tool calls.
 
 ### Installing as a Systemd Service
 

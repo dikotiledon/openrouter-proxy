@@ -213,13 +213,13 @@ def prepare_forward_headers(request: Request) -> dict:
     }
 
 
-def _invalid_model_response(model_name: str) -> HTTPException:
+def _invalid_model_response(model_name: str, param: str = "model") -> HTTPException:
     return HTTPException(
         status_code=400,
         detail={
             "message": f"Model '{model_name}' is not allowed by this proxy",
             "code": "invalid_request_error",
-            "param": "model",
+            "param": param,
         },
     )
 
@@ -230,6 +230,27 @@ def enforce_allowed_models(request_body: dict[str, Any]) -> dict[str, Any]:
         return request_body
 
     body = copy.deepcopy(request_body)
+    has_models = "models" in body
+    requested_models = body.get("models")
+
+    if has_models:
+        if not isinstance(requested_models, list) or not requested_models:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Invalid models value",
+                    "code": "invalid_request_error",
+                    "param": "models",
+                },
+            )
+        invalid_models = [
+            model_name
+            for model_name in requested_models
+            if not isinstance(model_name, str) or not model_name.strip() or model_name not in ALLOWED_MODELS
+        ]
+        if invalid_models:
+            raise _invalid_model_response(str(invalid_models[0]), param="models")
+
     requested_model = body.get("model")
     if requested_model is not None:
         if not isinstance(requested_model, str) or not requested_model.strip():
@@ -243,17 +264,26 @@ def enforce_allowed_models(request_body: dict[str, Any]) -> dict[str, Any]:
             )
         if requested_model not in ALLOWED_MODELS:
             raise _invalid_model_response(requested_model)
-        return body
 
-    requested_models = body.get("models")
-    if isinstance(requested_models, list) and requested_models:
-        invalid_models = [model_name for model_name in requested_models if not isinstance(model_name, str) or model_name not in ALLOWED_MODELS]
-        if invalid_models:
-            raise _invalid_model_response(str(invalid_models[0]))
+    if requested_model is not None or has_models:
         return body
 
     body["model"] = ALLOWED_MODELS[0]
     return body
+
+
+def _is_free_pricing(value: Any) -> bool:
+    """Return True when a pricing field is explicitly zero-cost."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return False
+    try:
+        return float(value) == 0.0
+    except (TypeError, ValueError):
+        return False
 
 
 def filter_models_response(body: bytes) -> bytes:
@@ -277,7 +307,10 @@ def filter_models_response(body: bytes) -> bytes:
         model_id = model.get("id") or model.get("name")
         if allowed_model_set and model_id not in allowed_model_set:
             continue
-        if config["openrouter"]["free_only"] and not all(model.get("pricing", {}).get(k, "1") == "0" for k in prices):
+        pricing = model.get("pricing", {})
+        if not isinstance(pricing, dict):
+            pricing = {}
+        if config["openrouter"]["free_only"] and not all(_is_free_pricing(pricing.get(k)) for k in prices):
             continue
         filtered_data.append(model)
 
@@ -467,10 +500,13 @@ async def proxy_with_httpx(
                         last_json = line[6:]
                     yield f"{line}\n\n".encode("utf-8")
             except Exception as err:
-                logger.error("sse_stream error: %s", err)
+                logger.exception("sse_stream error")
+                raise
             finally:
-                await openrouter_resp.aclose()
-            await check_httpx_err(last_json, api_key)
+                try:
+                    await check_httpx_err(last_json, api_key)
+                finally:
+                    await openrouter_resp.aclose()
 
 
         return StreamingResponse(
@@ -485,6 +521,8 @@ async def proxy_with_httpx(
     except httpx.TimeoutException as e:
         logger.error("Timeout connecting to OpenRouter: %s", str(e))
         raise HTTPException(504, "OpenRouter API request timed out") from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Internal error: %s", str(e))
         raise HTTPException(status_code=500, detail="Internal Proxy Error") from e

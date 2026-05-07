@@ -11,6 +11,14 @@ import os
 import httpx
 import yaml
 
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
 API_MODE = os.environ.get("API_MODE", "responses").strip().lower()
 DEFAULT_MODELS = {
     "responses": "deepseek/deepseek-r1:free",
@@ -20,13 +28,89 @@ DEFAULT_MODELS = {
 MODEL = os.environ.get("MODEL", DEFAULT_MODELS.get(API_MODE, "deepseek/deepseek-r1:free"))
 STREAM = False if API_MODE == "embeddings" else True
 MAX_TOKENS = 600
+PROMPT_CACHING_ENABLED = env_flag("ENABLE_PROMPT_CACHING", False)
+PROMPT_CACHE_TTL = os.environ.get("PROMPT_CACHE_TTL", "").strip()
+PROMPT_CACHE_REFERENCE = os.environ.get(
+    "PROMPT_CACHE_REFERENCE",
+    "Use this stable reference block when testing prompt caching.",
+).strip()
+REASONING_ENABLED = env_flag("ENABLE_REASONING", False) or env_flag("INCLUDE_REASONING", False)
+REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "").strip().lower()
+REASONING_MAX_TOKENS = os.environ.get("REASONING_MAX_TOKENS", "").strip()
+REASONING_EXCLUDE = env_flag("REASONING_EXCLUDE", False)
 
 
-def env_flag(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.lower() in {"1", "true", "yes", "on"}
+def build_cache_control() -> dict[str, str]:
+    cache_control = {"type": "ephemeral"}
+    if PROMPT_CACHE_TTL:
+        cache_control["ttl"] = PROMPT_CACHE_TTL
+    return cache_control
+
+
+def build_reasoning_config() -> dict[str, object] | None:
+    if REASONING_MAX_TOKENS and REASONING_EFFORT:
+        raise ValueError("Set only one of REASONING_MAX_TOKENS or REASONING_EFFORT.")
+
+    reasoning: dict[str, object] = {}
+    if REASONING_MAX_TOKENS:
+        reasoning["max_tokens"] = int(REASONING_MAX_TOKENS)
+    elif REASONING_EFFORT:
+        if REASONING_EFFORT not in {"xhigh", "high", "medium", "low", "minimal", "none"}:
+            raise ValueError(
+                "REASONING_EFFORT must be one of xhigh, high, medium, low, minimal, or none."
+            )
+        reasoning["effort"] = REASONING_EFFORT
+    elif REASONING_ENABLED or REASONING_EXCLUDE:
+        reasoning["enabled"] = True
+
+    if REASONING_EXCLUDE:
+        reasoning["exclude"] = True
+
+    return reasoning or None
+
+
+def build_chat_messages(prompt: str):
+    if not PROMPT_CACHING_ENABLED:
+        return [{"role": "user", "content": prompt}]
+
+    return [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Use the reference below when answering."},
+                {
+                    "type": "text",
+                    "text": PROMPT_CACHE_REFERENCE,
+                    "cache_control": build_cache_control(),
+                },
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": prompt}]},
+    ]
+
+
+def format_reasoning_details(reasoning_details) -> str:
+    if not reasoning_details:
+        return ""
+
+    if not isinstance(reasoning_details, list):
+        reasoning_details = [reasoning_details]
+
+    rendered: list[str] = []
+    for detail in reasoning_details:
+        if isinstance(detail, dict):
+            detail_type = detail.get("type")
+            if detail_type == "reasoning.summary" and detail.get("summary"):
+                rendered.append(str(detail.get("summary")))
+                continue
+            if detail_type == "reasoning.text" and detail.get("text"):
+                rendered.append(str(detail.get("text")))
+                continue
+            if detail_type == "reasoning.encrypted":
+                rendered.append(str(detail.get("data") or "[REDACTED]"))
+                continue
+        rendered.append(json.dumps(detail, ensure_ascii=False))
+    return "".join(rendered)
 
 def load_config():
     """
@@ -56,9 +140,6 @@ PROXY_BASE_PATH = PROXY_BASE_PATH.rstrip("/") or "/v1"
 # Override with environment variable if set
 if os.environ.get("ACCESS_KEY"):
     ACCESS_KEY = os.environ.get("ACCESS_KEY")
-
-INCLUDE_REASONING = env_flag("INCLUDE_REASONING", False)
-
 
 async def test_proxy_streaming():
     """
@@ -93,19 +174,19 @@ async def test_proxy_streaming():
             "stream": STREAM,
             "max_output_tokens": MAX_TOKENS,
         }
-        if INCLUDE_REASONING:
-            request_data["reasoning"] = {"effort": "low"}
+        if PROMPT_CACHING_ENABLED:
+            request_data["cache_control"] = build_cache_control()
+        if reasoning_config := build_reasoning_config():
+            request_data["reasoning"] = reasoning_config
     else:
         request_data = {
             "model": MODEL,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": build_chat_messages(prompt),
             "stream": STREAM,
             "max_tokens": MAX_TOKENS,
         }
-        if INCLUDE_REASONING:
-            request_data["include_reasoning"] = True
+        if reasoning_config := build_reasoning_config():
+            request_data["reasoning"] = reasoning_config
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=600.0))
     req = client.build_request("POST", url, headers=headers, json=request_data)
@@ -145,6 +226,12 @@ async def test_proxy_streaming():
                     if "error" in data:
                         raise ValueError(str(data))
                     choice = data["choices"][0]["delta"]
+                    if reasoning_details := choice.get("reasoning_details"):
+                        if not reasoning_phase:
+                            reasoning_phase = True
+                            print("<reasoning>")
+                        print(format_reasoning_details(reasoning_details), end="", flush=True)
+                        continue
                     if content := choice.get("content"):
                         if reasoning_phase:
                             reasoning_phase = False
@@ -186,7 +273,9 @@ async def test_proxy_streaming():
                 if "error" in data:
                     raise ValueError(str(data))
                 choice = data["choices"][0]["message"]
-                if reasoning := choice.get("reasoning"):
+                if reasoning_details := choice.get("reasoning_details"):
+                    print(f"<reasoning>\n{format_reasoning_details(reasoning_details)}</reasoning>\n")
+                elif reasoning := choice.get("reasoning"):
                     print(f"<reasoning>\n{reasoning}</reasoning>\n")
                 if content := choice.get("content"):
                     print(content, end='')
