@@ -11,6 +11,7 @@ Supports the full translation matrix:
 Reference: https://github.com/lutfi238/proxy-agentrouter
 """
 
+import hashlib
 import json
 import time
 import uuid
@@ -20,6 +21,9 @@ from typing import Any, Optional
 
 
 # ── Claude Code client fingerprint defaults ───────────────────────────────────
+
+CC_VERSION = "2.1.145"
+BILLING_SALT = "59cf53e54c78"
 
 DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_ANTHROPIC_BETA = (
@@ -33,6 +37,47 @@ DEFAULT_BILLING_HEADER = (
     "cc_entrypoint=sdk-cli; cch=00000;"
 )
 DEFAULT_MAX_TOKENS = 4096
+
+
+def _sha256(s: str) -> str:
+    """Return the full SHA-256 hex digest of a string."""
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+def compute_billing_header(
+    message_text: str,
+    *,
+    cc_version: str = CC_VERSION,
+    billing_salt: str = BILLING_SALT,
+    entrypoint: str = "sdk-cli",
+) -> str:
+    """Compute a per-request billing header based on the first user message.
+
+    Algorithm (from Claude Code source):
+    1. cch = SHA-256(message_text)[:5]
+    2. sampled = message[4] + message[7] + message[20], pad with "0" if short
+    3. version_hash = SHA-256(salt + sampled + version)[:3]
+    4. Format: "x-anthropic-billing-header: cc_version=V.hash; cc_entrypoint=E; cch=H;"
+    """
+    # Step 1: content hash
+    cch = _sha256(message_text)[:5]
+
+    # Step 2: sample characters
+    sampled = "".join(
+        message_text[i] if i < len(message_text) else "0"
+        for i in (4, 7, 20)
+    )
+
+    # Step 3: version integrity hash
+    version_hash = _sha256(f"{billing_salt}{sampled}{cc_version}")[:3]
+
+    # Step 4: format
+    return (
+        f"x-anthropic-billing-header: "
+        f"cc_version={cc_version}.{version_hash}; "
+        f"cc_entrypoint={entrypoint}; "
+        f"cch={cch};"
+    )
 
 # All overridable fingerprint fields with their defaults
 FINGERPRINT_DEFAULTS: dict[str, Any] = {
@@ -295,8 +340,26 @@ def translate_openai_to_anthropic(
         raise ValueError("At least one non-system message is required")
 
     # Inject billing header into system blocks if configured
-    if inject_billing and billing_header and not _has_billing_header(system_blocks):
-        system_blocks.insert(0, {"type": "text", "text": billing_header})
+    if inject_billing and not _has_billing_header(system_blocks):
+        # Extract first user message text for the content hash
+        first_user_text = ""
+        for msg in anthropic_messages:
+            if msg.get("role") == "user":
+                blocks = msg.get("content", [])
+                if isinstance(blocks, list):
+                    for b in blocks:
+                        if isinstance(b, dict) and b.get("type") == "text":
+                            first_user_text = b.get("text", "")
+                            break
+                break
+
+        if billing_header:
+            # Use static billing header if explicitly provided
+            system_blocks.insert(0, {"type": "text", "text": billing_header})
+        else:
+            # Compute dynamic billing header from user message
+            header = compute_billing_header(first_user_text)
+            system_blocks.insert(0, {"type": "text", "text": header})
 
     # Max tokens (required by Anthropic)
     max_tokens = default_max_tokens
