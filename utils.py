@@ -104,7 +104,7 @@ def check_google_error(data: str) -> Optional[str]:
     return None
 
 
-async def check_rate_limit(data: str | bytes) -> Tuple[bool, Optional[int]]:
+async def check_rate_limit(data: str | bytes, global_rate_delay: float = 0) -> Tuple[bool, Optional[int]]:
     """
     Check for rate limit error.
 
@@ -129,11 +129,9 @@ async def check_rate_limit(data: str | bytes) -> Tuple[bool, Optional[int]]:
                 if code == RATE_LIMIT_ERROR_CODE and (raw := err["error"].get("metadata", {}).get("raw", "")):
                     issue = check_global_limit(raw) or check_google_error(raw)
                     if issue:
-                        delay_seconds = config["openrouter"].get("global_rate_delay", 0) or 0
-                        if delay_seconds > 0:
-                            reset_time_ms = int((time.time() + delay_seconds) * 1000)
-                            logger.info("%s, applying %s second cooldown.", issue, delay_seconds)
-                            return True, reset_time_ms
+                        if global_rate_delay > 0:
+                            logger.info("%s, applying %s second cooldown.", issue, global_rate_delay)
+                            return True, int((time.time() + global_rate_delay) * 1000)
                         return False, None
                 x_rate_limit = 0
 

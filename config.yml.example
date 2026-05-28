@@ -1,4 +1,15 @@
 # OpenRouter Proxy Configuration
+#
+# This proxy supports bidirectional protocol translation:
+#   - Client can send OpenAI format (/v1/chat/completions) or Anthropic format (/v1/messages)
+#   - Upstream can be OpenAI-compatible or Anthropic Messages API
+#   - Translation happens automatically based on upstream_format setting
+#
+# Translation matrix:
+#   Client OpenAI    → upstream_format: "openai"     → passthrough
+#   Client OpenAI    → upstream_format: "anthropic"  → translate + spoof Claude Code headers
+#   Client Anthropic → upstream_format: "openai"     → translate to OpenAI, send, translate back
+#   Client Anthropic → upstream_format: "anthropic"  → strip prefix, spoof headers, passthrough
 
 # Server settings
 server:
@@ -8,45 +19,164 @@ server:
   log_level: "INFO"  # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   http_log_level: "INFO"  # HTTP access logs level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
-# OpenRouter API keys
-openrouter:
-  keys:
-    - "sk-or-v1-your-first-api-key"
-    - "sk-or-v1-your-second-api-key"
-    - "sk-or-v1-your-third-api-key"
+# Provider registry
+# Each provider defines an upstream API endpoint with its own keys, models, and protocol.
+# Models are always requested as <provider>/<model> from the client side.
+providers:
 
-  # Optional list of model IDs that clients are allowed to use.
-  # When set, the proxy rejects any other model and defaults to the first
-  # entry when a request omits the model field.
-  allowed_models:
-    - "deepseek/deepseek-r1:free"
-    - "openai/text-embedding-3-small"
+  # ─── OpenAI-compatible upstream (default mode) ──────────────────────────────
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    # upstream_format: "openai"  # default, can be omitted
+    keys:
+      - "sk-or-...-key1"
+      - "sk-or-...-key2"
 
-  # Key selection strategy: "round-robin" (default), "first" or "random".
-  key_selection_strategy: "round-robin"
-  # List of key selection options:
-  #   "same": Always use the last used key as long as it is possible.
-  key_selection_opts: []
+    # Only these models may be requested by clients.
+    # Every entry must be provider-qualified as <provider>/<model>.
+    allowed_models:
+      - "openrouter/deepseek/deepseek-r1:free"
+      - "openrouter/google/gemma-4-31b-it:free"
+      - "openrouter/openai/gpt-oss-120b:free"
 
-  # OpenRouter API base URL
-  base_url: "https://openrouter.ai/api/v1"
+    # Key selection strategy: "round-robin" (default), "first" or "random".
+    key_selection_strategy: "round-robin"
+    # Key selection options:
+    #   "same": Always reuse the last used key as long as possible.
+    key_selection_opts: []
 
-  # Public endpoints that don't require authentication.
-  # The proxy normalizes /models, /v1/models, and /api/v1/models to the same route.
-  public_endpoints:
-    - "/api/v1/models"
+    # Public endpoints that don't require client authentication
+    public_endpoints:
+      - "/models"
 
-  # Time in seconds to temporarily disable a key when rate limit is reached by default
-  rate_limit_cooldown: 14400  # 4 hours
-  free_only: false # try to show only free models
-  # OpenRouter can return a 429 error if a model is overloaded.
-  # Additionally, Google sometimes returns 429 RESOURCE_EXHAUSTED errors repeatedly,
-  # which can cause Roo Code to stop.
-  # This option prevents repeated failures by introducing a delay before retrying.
-  # global_rate_delay: 10 # in seconds
-  global_rate_delay: 0
+    # Time in seconds to temporarily disable a key when rate limit is reached
+    rate_limit_cooldown: 14400  # 4 hours
 
-# Proxy settings for outgoing requests to OpenRouter
+    # Only show free models in /models listing
+    free_only: false
+
+    # Minimum delay between upstream requests (seconds). Prevents 429 storms.
+    # Set to 0 to disable request pacing.
+    global_rate_delay: 8
+
+  # ─── Another OpenAI-compatible upstream ─────────────────────────────────────
+  openai:
+    base_url: "https://api.openai.com/v1"
+    # upstream_format: "openai"  # default
+    keys:
+      - "sk-proj-...-key"
+    allowed_models:
+      - "openai/gpt-4o"
+      - "openai/o3-mini"
+    key_selection_strategy: "round-robin"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 0
+
+  # ─── Local Ollama (no auth needed) ──────────────────────────────────────────
+  ollama:
+    base_url: "http://127.0.0.1:11434/v1"
+    keys: []  # Ollama doesn't need auth
+    allowed_models:
+      - "ollama/llama3.1"
+      - "ollama/qwen2.5:14b"
+    key_selection_strategy: "round-robin"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 0
+    supports_stateful_responses: false
+
+  # ─── Anthropic upstream (AgentRouter) ───────────────────────────────────────
+  # This is the key feature: translates OpenAI requests → Anthropic Messages format,
+  # spoofs Claude Code client headers to bypass AgentRouter's client detection.
+  agentrouter:
+    base_url: "https://agentrouter.org"
+    upstream_format: "anthropic"  # ← triggers protocol translation + header spoofing
+
+    # Anthropic-specific settings
+    upstream_messages_path: "/v1/messages?beta=true"  # Anthropic Messages endpoint
+    model_prefix: "agentrouter/"  # Stripped before sending upstream
+    default_max_tokens: 4096  # When client doesn't specify max_tokens
+    inject_billing: true  # Inject billing header into system prompt (required by AgentRouter)
+
+    keys:
+      - "sk-your-agentrouter-key"
+    allowed_models:
+      - "agentrouter/glm-5.1"
+      - "agentrouter/deepseek-v4-flash"
+      - "agentrouter/deepseek-v4-pro"
+      - "agentrouter/claude-opus-4-6"
+      - "agentrouter/claude-haiku-4-5-20251001"
+    key_selection_strategy: "first"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 5
+
+    # ─── Fingerprint overrides (all optional, sensible defaults built-in) ─────
+    # Override any Claude Code client fingerprint header value.
+    # See FINGERPRINT_DEFAULTS in protocol_adapter.py for all available fields.
+    # fingerprint:
+    #   anthropic_version: "2023-06-01"
+    #   anthropic_beta: "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24"
+    #   user_agent: "claude-cli/2.1.145 (external, sdk-cli)"
+    #   anthropic_browser_access: "true"
+    #   x_app: "cli"
+    #   stainless_arch: "x64"
+    #   stainless_lang: "js"
+    #   stainless_os: "Windows"
+    #   stainless_package_version: "0.93.0"
+    #   stainless_runtime: "node"
+    #   stainless_runtime_version: "v24.3.0"
+    #   stainless_timeout: "300"
+    #   billing_header: "x-anthropic-billing-header: cc_version=2.1.145.560; cc_entrypoint=sdk-cli; cch=00000;"
+
+    # ─── Custom headers (highest priority, overrides everything) ──────────────
+    # Add any extra headers or override fingerprint headers directly.
+    # custom_headers:
+    #   X-Custom-Header: "my-value"
+    #   X-Request-Source: "my-proxy"
+
+  # ─── Custom OpenAI-compatible provider ──────────────────────────────────────
+  # Any OpenAI-compatible API can be added as a provider.
+  # mimo:
+  #   base_url: "https://token-plan-sgp.xiaomimimo.com/v1"
+  #   # upstream_format: "openai"  # default
+  #   keys:
+  #     - "tp-your-mimo-key"
+  #   allowed_models:
+  #     - "mimo/mimo-v2.5-pro"
+  #   key_selection_strategy: "first"
+  #   key_selection_opts: []
+  #   public_endpoints:
+  #     - "/models"
+  #   rate_limit_cooldown: 14400
+  #   global_rate_delay: 5
+
+  # ─── Another Anthropic upstream example ─────────────────────────────────────
+  # You can add multiple anthropic-format providers with different fingerprints.
+  # anthropic-direct:
+  #   base_url: "https://api.anthropic.com"
+  #   upstream_format: "anthropic"
+  #   upstream_messages_path: "/v1/messages"
+  #   model_prefix: "anthropic-direct/"
+  #   default_max_tokens: 8192
+  #   inject_billing: false  # Not needed for direct Anthropic API
+  #   keys:
+  #     - "sk-ant-your-key"
+  #   allowed_models:
+  #     - "anthropic-direct/claude-sonnet-4-20250514"
+  #   fingerprint:
+  #     user_agent: "my-app/1.0"  # Override user agent
+  #   custom_headers:
+  #     anthropic-dangerous-direct-browser-access: "true"
+
+# Proxy settings for outgoing requests (SOCKS5/HTTP proxy for all upstream calls)
 requestProxy:
   enabled: false  # Set to true to enable proxy
-  url: "socks5://username:password@example.com:1080"  # Proxy URL with optional credentials embedded
+  url: "socks5://username:password@example.com:1080"  # Proxy URL with optional credentials

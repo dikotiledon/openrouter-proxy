@@ -5,7 +5,6 @@ Implements key rotation and rate limit handling.
 """
 
 import asyncio
-import sys
 import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -25,8 +24,15 @@ def mask_key(key: str) -> str:
 
 
 class KeyManager:
-    """Manages OpenRouter API keys, including rotation and rate limit handling."""
-    def __init__(self, keys: List[str], cooldown_seconds: int, strategy: str, opts: list[str]):
+    """Manages provider API keys, including rotation and rate limit handling."""
+    def __init__(
+        self,
+        keys: List[str],
+        cooldown_seconds: int,
+        strategy: str,
+        opts: list[str],
+        label: str = "provider",
+    ):
         self.keys = keys
         self.cooldown_seconds = cooldown_seconds
         self.current_index = 0
@@ -35,13 +41,16 @@ class KeyManager:
         self.use_last_key = "same" in opts
         self.last_key = None
         self.lock = asyncio.Lock()
+        self.label = label
 
         if not keys:
-            logger.error("No API keys provided in configuration.")
-            sys.exit(1)
+            logger.info("No API keys provided in configuration for %s; requests will be sent without Authorization.", self.label)
 
     async def get_next_key(self) -> str:
         """Get the next available API key using round-robin selection."""
+        if not self.keys:
+            return ""
+
         available_keys = []
         async with self.lock:
             now_ = datetime.now()
@@ -51,7 +60,7 @@ class KeyManager:
                     if now_ >= self.disabled_until[key]:
                         # Key cooldown period has expired
                         del self.disabled_until[key]
-                        logger.info("API key %s is now enabled again.", mask_key(key))
+                        logger.info("[%s] API key %s is now enabled again.", self.label, mask_key(key))
                         available_keys.append(key)
                 else:
                     # Key is not disabled
@@ -62,7 +71,9 @@ class KeyManager:
                 soonest_available = min(self.disabled_until.values())
                 wait_seconds = (soonest_available - now_).total_seconds()
                 logger.error(
-                    "All API keys are currently disabled. The next key will be available in %.2f seconds.", wait_seconds
+                    "[%s] All API keys are currently disabled. The next key will be available in %.2f seconds.",
+                    self.label,
+                    wait_seconds,
                 )
                 raise HTTPException(
                     status_code=503,
@@ -108,23 +119,37 @@ class KeyManager:
                     # Ensure reset time is in the future
                     if reset_datetime > now_:
                         disabled_until = reset_datetime
-                        logger.info("Using server-provided reset time: %s", str(disabled_until))
+                        logger.info("[%s] Using server-provided reset time: %s", self.label, str(disabled_until))
                     else:
                         # Fallback to default cooldown if reset time is in the past
                         disabled_until = now_ + timedelta(seconds=self.cooldown_seconds)
                         logger.warning(
-"Server-provided reset time is in the past, using default cooldown of %s seconds", self.cooldown_seconds)
+                            "[%s] Server-provided reset time is in the past, using default cooldown of %s seconds",
+                            self.label,
+                            self.cooldown_seconds,
+                        )
                 except Exception as e:
                     # Fallback to default cooldown on error
                     disabled_until = now_ + timedelta(seconds=self.cooldown_seconds)
                     logger.error(
-"Error processing reset time %s, using default cooldown: %s", reset_time_ms, e)
+                        "[%s] Error processing reset time %s, using default cooldown: %s",
+                        self.label,
+                        reset_time_ms,
+                        e,
+                    )
             else:
                 # Use default cooldown period
                 disabled_until = now_ + timedelta(seconds=self.cooldown_seconds)
                 logger.info(
-"No reset time provided, using default cooldown of %s seconds", self.cooldown_seconds)
+                    "[%s] No reset time provided, using default cooldown of %s seconds",
+                    self.label,
+                    self.cooldown_seconds,
+                )
 
             self.disabled_until[key] = disabled_until
             logger.warning(
-    "API key %s has been disabled until %s.", mask_key(key), disabled_until)
+                "[%s] API key %s has been disabled until %s.",
+                self.label,
+                mask_key(key),
+                disabled_until,
+            )

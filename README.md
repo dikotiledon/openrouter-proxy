@@ -1,23 +1,24 @@
 # OpenRouter Proxy
 
-A simple proxy server for OpenRouter API that helps bypass rate limits on free API keys
-by rotating through multiple API keys in a round-robin fashion.
+A provider-routed OpenAI-compatible proxy for OpenRouter, Ollama, and OpenAI.
+It forwards client requests to a configured upstream provider registry and rotates
+through provider-specific API keys when applicable.
 
 ## Features
 
-- Proxies OpenAI-compatible client requests to OpenRouter API v1
+- Proxies OpenAI-compatible client requests through a provider registry
 - Supports both `/v1` and `/api/v1` client prefixes
-- Proxies OpenAI Responses API requests directly to OpenRouter's Responses endpoints
-- Proxies OpenAI embeddings requests directly to OpenRouter's embeddings endpoint
-- Enforces an optional `allowed_models` list so clients can only use configured models
-- Filters `/models` to the configured allowlist and free-only policy
-- Passes OpenRouter prompt-caching controls, reasoning settings, sampling parameters, and tool-calling fields through unchanged
-- Rotates multiple API keys to bypass rate limits
-- Automatically disables API keys temporarily when rate limits are reached
+- Requires provider-qualified model IDs such as `openrouter/...`, `ollama/...`, and `openai/...`
+- Aggregates `/models` from configured providers and prefixes returned model IDs
+- Proxies OpenAI Responses and embeddings requests to the selected provider
+- Enforces optional provider-scoped `allowed_models` lists and free-only policies
+- Passes provider-supported prompt-caching, reasoning, sampling, and tool-calling fields through unchanged
+- Rotates multiple API keys per provider to bypass rate limits
+- Automatically disables provider API keys temporarily when rate limits are reached
 - Streams responses chunk by chunk for efficient data transfer
 - Simple authentication for accessing the proxy
 - Preserves OpenAI-style error envelopes for client-facing compatibility
-- Theoretically compatible with any OpenAI-compatible API by changing the `base_url` and `public_endpoints` in `config.yml`
+- Supports any OpenAI-compatible upstream by adding a provider block in `config.yml`
 
 ## Setup
 
@@ -32,7 +33,7 @@ by rotating through multiple API keys in a round-robin fashion.
    ```
    cp config.yml.example config.yml
    ```
-4. Edit `config.yml` to add your OpenRouter API keys and configure the server
+4. Edit `config.yml` to add one or more provider blocks and configure the server
 
 ## Configuration
 
@@ -47,48 +48,77 @@ server:
   log_level: "INFO" # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   http_log_level: "INFO" # HTTP access logs level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
-# OpenRouter API keys
-openrouter:
-  keys:
-    - "sk-or-v1-your-first-api-key"
-    - "sk-or-v1-your-second-api-key"
-    - "sk-or-v1-your-third-api-key"
+# Provider registry
+providers:
+  openrouter:
+    keys:
+      - "sk-or-v1-your-first-api-key"
+      - "sk-or-v1-your-second-api-key"
 
-  # Optional list of model IDs that clients are allowed to use.
-  # When set, the proxy rejects any other model and defaults to the first
-  # entry when a request omits the model field.
-  allowed_models:
-    - "deepseek/deepseek-r1:free"
-    - "openai/text-embedding-3-small"
+    # Optional list of model IDs that clients are allowed to use.
+    # Every entry must be provider-qualified.
+    allowed_models:
+      - "openrouter/google/gemma-4-31b-it:free"
+      - "openrouter/openai/text-embedding-3-small"
 
-  # Key selection strategy: "round-robin" (default), "first" or "random".
-  key_selection_strategy: "round-robin"
-  # List of key selection options:
-  #   "same": Always use the last used key as long as it is possible.
-  key_selection_opts: []
+    # Key selection strategy: "round-robin" (default), "first" or "random".
+    key_selection_strategy: "round-robin"
+    key_selection_opts: []
+    base_url: "https://openrouter.ai/api/v1"
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    free_only: true
+    # OpenRouter can return a 429 error if a model is overloaded.
+    # Additionally, Google sometimes returns 429 RESOURCE_EXHAUSTED errors repeatedly,
+    # which can cause Roo Code to stop.
+    # This option spaces out upstream requests for the provider.
+    # Set it to 0 to disable pacing.
+    # global_rate_delay: 10 # in seconds
+    global_rate_delay: 30
 
-  # OpenRouter API base URL
-  base_url: "https://openrouter.ai/api/v1"
+  ollama:
+    base_url: "http://127.0.0.1:11434/v1"
+    keys: []
+    allowed_models:
+      - "ollama/llama3.1"
+      - "ollama/qwen2.5:14b"
+    key_selection_strategy: "round-robin"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 0
+    supports_stateful_responses: false
 
-  # Public endpoints that don't require authentication
-  public_endpoints:
-    - "/api/v1/models"
+  openai:
+    base_url: "https://api.openai.com/v1"
+    keys:
+      - "sk-proj-your-openai-key"
+    allowed_models:
+      - "openai/o3-mini"
+      - "openai/text-embedding-3-small"
+    key_selection_strategy: "round-robin"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 0
 
-  # Time in seconds to temporarily disable a key when rate limit is reached by default
-  rate_limit_cooldown: 14400 # 4 hours
-  free_only: false # try to show only free models
-  # OpenRouter can return a 429 error if a model is overloaded.
-  # Additionally, Google sometimes returns 429 RESOURCE_EXHAUSTED errors repeatedly,
-  # which can cause Roo Code to stop.
-  # This option prevents repeated failures by introducing a delay before retrying.
-  # global_rate_delay: 10 # in seconds
-  global_rate_delay: 0
-
-# Proxy settings for outgoing requests to OpenRouter
+# Proxy settings for outgoing requests
 requestProxy:
   enabled: false # Set to true to enable proxy
   url: "socks5://username:password@example.com:1080" # Proxy URL with optional credentials embedded
 ```
+
+### Provider Routing
+
+Requests must choose a provider explicitly.
+
+- Use provider-qualified model IDs such as `openrouter/google/gemma-4-31b-it:free`, `ollama/llama3.1`, and `openai/o3-mini`
+- Use `?provider=openrouter`, `?provider=ollama`, or `?provider=openai` to pin model-list requests to one provider
+- OpenRouter-only request fields such as `models`, `provider`, and `plugins` are preserved only when the selected provider is `openrouter`
+- Providers with no upstream key can use `keys: []` in `config.yml`
 
 ## Usage
 
@@ -113,7 +143,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-  model="deepseek/deepseek-r1:free",
+  model="openrouter/google/gemma-4-31b-it:free",
   messages=[{"role": "user", "content": "Say hello in one sentence."}],
 )
 print(response.choices[0].message.content)
@@ -130,7 +160,7 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-  model="deepseek/deepseek-r1:free",
+  model="openai/o3-mini",
   input="Write one short sentence about the ocean.",
 )
 print(response.output_text)
@@ -155,7 +185,7 @@ print(len(response.data[0].embedding))
 
 ### Tool Calling
 
-The proxy does not emulate tool calling locally. It forwards OpenRouter-compatible request bodies to OpenRouter, so tool behavior is determined by the selected model and upstream support.
+The proxy does not emulate tool calling locally. It forwards provider-compatible request bodies to the selected upstream provider, so tool behavior is determined by the selected model and upstream support.
 
 | Surface                | What is forwarded                                                                                                                                                                                               | What is not done locally                                                     |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -164,16 +194,16 @@ The proxy does not emulate tool calling locally. It forwards OpenRouter-compatib
 
 Notes:
 
-- `tool_choice` is passed through as OpenRouter accepts it (`auto`, `none`, or a forced function tool).
-- OpenRouter-specific fields such as `cache_control`, `models`, `provider`, `plugins`, `reasoning`, and `reasoning_details` also flow through because the proxy forwards the JSON body unchanged.
+- `tool_choice` is passed through as the upstream provider accepts it (`auto`, `none`, or a forced function tool).
+- OpenRouter-specific fields such as `cache_control`, `models`, `provider`, `plugins`, `reasoning`, and `reasoning_details` flow through on the OpenRouter provider and are stripped for other providers.
 - The proxy does not run tools. Your application still needs to execute the function and send the result back in a follow-up request when the flow requires it.
-- If the chosen model does not support tools, OpenRouter may ignore or reject the request.
+- If the chosen model does not support tools, the upstream provider may ignore or reject the request.
 
 ### Prompt Caching
 
-The proxy does not implement caching locally. It forwards OpenRouter prompt-caching controls unchanged, including top-level `cache_control` on supported requests and per-block `cache_control` breakpoints inside message content.
+The proxy does not implement caching locally. It forwards OpenRouter prompt-caching controls unchanged when the selected provider is OpenRouter, including top-level `cache_control` on supported requests and per-block `cache_control` breakpoints inside message content.
 
-That means OpenRouter can apply provider sticky routing upstream, and the proxy will preserve the request body needed for cache hits.
+That means OpenRouter can apply provider sticky routing upstream, and the proxy will preserve the request body needed for cache hits. Other providers receive only the fields they support.
 
 Example with an OpenAI-compatible client:
 
@@ -186,7 +216,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-  model="anthropic/claude-sonnet-4.6",
+  model="openrouter/anthropic/claude-sonnet-4.6",
   messages=[
     {
       "role": "system",
@@ -207,7 +237,7 @@ response = client.chat.completions.create(
 
 ### Reasoning Tokens
 
-The proxy also forwards OpenRouter reasoning controls unchanged. Use the unified `reasoning` object for modern requests, and the proxy will preserve returned `reasoning` and `reasoning_details` blocks in both streaming and non-streaming responses.
+The proxy also forwards OpenRouter reasoning controls unchanged when the selected provider is OpenRouter. Use the unified `reasoning` object for modern requests, and the proxy will preserve returned `reasoning` and `reasoning_details` blocks in both streaming and non-streaming responses.
 
 Legacy `include_reasoning` still passes through, but `reasoning` is the preferred interface.
 
@@ -222,7 +252,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-  model="openai/o3-mini",
+  model="openrouter/openai/o3-mini",
   messages=[{"role": "user", "content": "Explain quantum computing in simple terms."}],
   extra_body={"reasoning": {"effort": "high", "exclude": False}},
 )
@@ -274,10 +304,12 @@ Authorization: Bearer your_local_access_key_here
 
 ## API Endpoints
 
-The proxy supports OpenRouter passthrough and OpenAI-compatible client endpoints through the following client-facing endpoints:
+The proxy supports provider-routed OpenAI-compatible client endpoints through the following client-facing endpoints:
 
 - `/v1/{path}` - Recommended OpenAI-compatible client surface
 - `/api/v1/{path}` - Backward-compatible OpenRouter-style surface
+- `/v1/models` or `/api/v1/models` - Aggregated provider model list
+- `/v1/models?provider=openrouter` - Provider-scoped model list
 - `/v1/responses` - OpenAI Responses API passthrough
 - `/v1/responses/{response_id}` - Retrieve, delete, or cancel a response
 - `/v1/responses/{response_id}/input_items` - List the stored input items for a response
