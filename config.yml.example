@@ -8,14 +8,22 @@
 # Translation matrix:
 #   Client OpenAI    → upstream_format: "openai"     → passthrough
 #   Client OpenAI    → upstream_format: "anthropic"  → translate + spoof Claude Code headers
+#   Client OpenAI    → upstream_format: "gemini"     → translate to Gemini
 #   Client Anthropic → upstream_format: "openai"     → translate to OpenAI, send, translate back
 #   Client Anthropic → upstream_format: "anthropic"  → strip prefix, spoof headers, passthrough
+#   Client Anthropic → upstream_format: "gemini"     → translate to Gemini
+#   Client Gemini    → upstream_format: "openai"     → translate to OpenAI, send, translate back
+#   Client Gemini    → upstream_format: "anthropic"  → translate to Anthropic, send, translate back
+#   Client Gemini    → upstream_format: "gemini"     → passthrough
+#   Client Responses → upstream_format: "openai"     → passthrough (Responses API)
+#   Client Responses → upstream_format: "anthropic"  → translate to Anthropic
+#   Client Responses → upstream_format: "gemini"     → translate to Gemini
 
 # Server settings
 server:
-  host: "0.0.0.0"  # Default interface
+  host: "127.0.0.1"  # Only local connections; use "0.0.0.0" to expose to all network interfaces
   port: 5555  # Default port
-  access_key: "your_local_access_key_here"  # Key for accessing the local proxy
+  access_key: "your_local_access_key_here"  # WARNING: MUST be changed before deployment
   log_level: "INFO"  # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   http_log_level: "INFO"  # HTTP access logs level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
@@ -90,18 +98,34 @@ providers:
     global_rate_delay: 0
     supports_stateful_responses: false
 
-  # ─── Anthropic upstream (AgentRouter) ───────────────────────────────────────
-  # This is the key feature: translates OpenAI requests → Anthropic Messages format,
-  # spoofs Claude Code client headers to bypass AgentRouter's client detection.
+  # ─── Anthropic upstream (AgentRouter) — Full Claude Code Spoof ──────────────
+  # Translates OpenAI requests → Anthropic Messages format,
+  # spoofs Claude Code client fingerprint to bypass AgentRouter's client detection.
   agentrouter:
     base_url: "https://agentrouter.org"
-    upstream_format: "anthropic"  # ← triggers protocol translation + header spoofing
+    upstream_format: "anthropic"
 
     # Anthropic-specific settings
-    upstream_messages_path: "/v1/messages?beta=true"  # Anthropic Messages endpoint
-    model_prefix: "agentrouter/"  # Stripped before sending upstream
-    default_max_tokens: 4096  # When client doesn't specify max_tokens
-    inject_billing: true  # Inject billing header into system prompt (required by AgentRouter)
+    upstream_messages_path: "/v1/messages?beta=true"
+    model_prefix: "agentrouter/"
+    default_max_tokens: 4096
+    inject_billing: true                     # Required by AgentRouter — injects
+                                             # billing trace into system prompt text
+
+    # ─── Reasoning / Thinking configuration ──────────────────────────────
+    # reasoning_mode controls how the proxy injects thinking parameters upstream.
+    # Supported modes:
+    #   "openai_reasoning"     → reasoning: {effort: "high"}       (OpenAI, OpenRouter, most APIs)
+    #   "anthropic_thinking"   → thinking: {type: "enabled", ...}  (Anthropic, AgentRouter)
+    #   "enable_thinking_flag" → enable_thinking: true             (Alibaba DashScope, some providers)
+    #   "chat_template"        → chat_template_kwargs.enable_thinking: true  (HuggingFace TGI, vLLM)
+    #   "" (empty/omit)       → don't inject, client controls it
+    reasoning_mode: "anthropic_thinking"
+
+    # reasoning_effort sets the default effort when client doesn't specify one.
+    # Budget mapping: minimal→512, low→1024, medium→4096, high→16384, xhigh→32768
+    # Omit or set to "" to let client control reasoning entirely.
+    # reasoning_effort: "medium"
 
     keys:
       - "sk-your-agentrouter-key"
@@ -118,29 +142,35 @@ providers:
     rate_limit_cooldown: 14400
     global_rate_delay: 5
 
-    # ─── Fingerprint overrides (all optional, sensible defaults built-in) ─────
-    # Override any Claude Code client fingerprint header value.
-    # See FINGERPRINT_DEFAULTS in protocol_adapter.py for all available fields.
-    # fingerprint:
-    #   anthropic_version: "2023-06-01"
-    #   anthropic_beta: "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24"
-    #   user_agent: "claude-cli/2.1.145 (external, sdk-cli)"
-    #   anthropic_browser_access: "true"
-    #   x_app: "cli"
-    #   stainless_arch: "x64"
-    #   stainless_lang: "js"
-    #   stainless_os: "Windows"
-    #   stainless_package_version: "0.93.0"
-    #   stainless_runtime: "node"
-    #   stainless_runtime_version: "v24.3.0"
-    #   stainless_timeout: "300"
-    #   billing_header: "x-anthropic-billing-header: cc_version=2.1.145.560; cc_entrypoint=sdk-cli; cch=00000;"
+    # ─── Full Claude Code fingerprint ──────────────────────────────────────
+    # All fields override FINGERPRINT_DEFAULTS in protocol_adapter.py.
+    # Omit any field to use the built-in default.
+    fingerprint:
+      anthropic_version: "2023-06-01"
+      anthropic_beta: "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24"
+      user_agent: "claude-cli/2.1.145 (external, sdk-cli)"
+      anthropic_browser_access: "true"       # → anthropic-dangerous-direct-browser-access
+      x_app: "cli"
 
-    # ─── Custom headers (highest priority, overrides everything) ──────────────
-    # Add any extra headers or override fingerprint headers directly.
-    # custom_headers:
-    #   X-Custom-Header: "my-value"
-    #   X-Request-Source: "my-proxy"
+      # Stainless SDK fingerprint (Node.js — matches Claude Code runtime)
+      stainless_arch: "x64"
+      stainless_lang: "js"
+      stainless_os: "Linux"                  # "Windows" / "MacOS" — match target platform
+      stainless_package_version: "0.93.0"
+      stainless_runtime: "node"
+      stainless_runtime_version: "v24.15.0"  # must be valid Node version string
+      stainless_timeout: "600"               # 600s matches real Claude Code
+
+      # Billing header: empty string = compute dynamic cch from user message.
+      # Set to a static value like "x-anthropic-billing-header: cc_version=2.1.145.560; cc_entrypoint=sdk-cli; cch=00000;"
+      # to bypass per-request computation.
+      billing_header: ""
+
+    # ─── Custom headers (highest priority, overrides fingerprint) ─────────
+    custom_headers:
+      x-stainless-helper-method: "stream"    # present in real Claude Code requests
+      x-stainless-retry-count: "0"           # base request, not a retry
+      x-stainless-timeout: "600"
 
   # ─── Custom OpenAI-compatible provider ──────────────────────────────────────
   # Any OpenAI-compatible API can be added as a provider.
@@ -175,6 +205,25 @@ providers:
   #     user_agent: "my-app/1.0"  # Override user agent
   #   custom_headers:
   #     anthropic-dangerous-direct-browser-access: "true"
+
+  # ─── Gemini upstream (native GenerateContent API) ─────────────────────────
+  # gemini:
+  #   base_url: "https://generativelanguage.googleapis.com"
+  #   upstream_format: "gemini"
+  #   gemini_api_version: "v1beta"
+  #   model_prefix: "gemini/"
+  #   default_max_tokens: 8192
+  #   keys:
+  #     - "your-gemini-api-key"
+  #   allowed_models:
+  #     - "gemini/gemini-2.0-flash"
+  #     - "gemini/gemini-2.5-pro"
+  #   key_selection_strategy: "round-robin"
+  #   key_selection_opts: []
+  #   public_endpoints:
+  #     - "/models"
+  #   rate_limit_cooldown: 14400
+  #   global_rate_delay: 5
 
 # Proxy settings for outgoing requests (SOCKS5/HTTP proxy for all upstream calls)
 requestProxy:

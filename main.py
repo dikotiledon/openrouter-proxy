@@ -11,12 +11,16 @@ from config import config, logger
 from routes import router, lifespan
 from utils import get_local_ip
 
-# Create FastAPI app
+# Disable docs in production by default
+docs_url = "/docs" if config.get("server", {}).get("enable_docs", False) else None
 app = FastAPI(
     title="OpenRouter OpenAI-Compatible Proxy",
     description="Proxies OpenAI-compatible client requests to OpenRouter API and rotates API keys to bypass rate limits",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=docs_url,
+    redoc_url=None,
+    openapi_url="/openapi.json" if docs_url else None,
 )
 
 # Include routes

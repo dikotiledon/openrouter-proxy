@@ -11,12 +11,24 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from config import logger
+from constants import CLIENT_API_PREFIXES, REASONING_EFFORT_BUDGET_MAP, VALID_REASONING_EFFORTS
 from key_manager import KeyManager
 from request_pacer import ProviderRequestPacer
 
 
-CLIENT_API_PREFIXES = ("/api/v1", "/v1")
 OPENROUTER_ONLY_REQUEST_FIELDS = {"models", "provider", "plugins"}
+
+# How the proxy injects reasoning/thinking parameters for the upstream provider
+REASONING_MODE_OPENAI = "openai_reasoning"          # reasoning: {effort: "high"}
+REASONING_MODE_ANTHROPIC = "anthropic_thinking"      # thinking: {type: "enabled", budget_tokens: N}
+REASONING_MODE_ENABLE_FLAG = "enable_thinking_flag"  # enable_thinking: true
+REASONING_MODE_CHAT_TEMPLATE = "chat_template"       # injected into chat_template_kwargs
+REASONING_MODES = {
+    REASONING_MODE_OPENAI,
+    REASONING_MODE_ANTHROPIC,
+    REASONING_MODE_ENABLE_FLAG,
+    REASONING_MODE_CHAT_TEMPLATE,
+}
 
 DEFAULT_BASE_URLS = {
     "openrouter": "https://openrouter.ai/api/v1",
@@ -141,6 +153,10 @@ class ProviderRuntime:
     upstream_chat_path: str = ""
     # Upstream path for messages (anthropic mode)
     upstream_messages_path: str = ""
+    # Upstream path for generate content (gemini mode)
+    upstream_generate_path: str = ""
+    # Gemini API version (v1 or v1beta)
+    gemini_api_version: str = "v1beta"
     # Model prefix to strip before sending upstream (e.g. "agentrouter/")
     model_prefix: str = ""
     # Default max_tokens when client doesn't specify
@@ -149,8 +165,11 @@ class ProviderRuntime:
     inject_billing: bool = False
     # Fingerprint overrides for anthropic headers (anthropic_version, user_agent, etc.)
     fingerprint: dict[str, Any] = field(default_factory=dict)
-    # Extra headers merged on top of the fingerprint (take precedence)
+# Extra headers merged on top of the fingerprint (take precedence)
     custom_headers: dict[str, str] = field(default_factory=dict)
+    # Reasoning/thinking configuration
+    reasoning_mode: str = ""              # see REASONING_MODES
+    reasoning_effort: str = ""            # low/medium/high/xhigh/minimal/none
     key_manager: KeyManager = field(init=False)
     request_pacer: ProviderRequestPacer = field(init=False)
 
@@ -369,10 +388,10 @@ def _normalize_provider_block(provider_id: str, provider_config: Any) -> dict[st
         supports_stateful_responses = provider_id != "ollama"
     normalized["supports_stateful_responses"] = supports_stateful_responses
 
-    # Upstream format: "openai" (default) or "anthropic"
+    # Upstream format: "openai" (default), "anthropic", or "gemini"
     # Accept both "upstream_format" and legacy "upstream_mode"
     upstream_format = normalized.get("upstream_format") or normalized.get("upstream_mode", "openai")
-    if not isinstance(upstream_format, str) or upstream_format not in ("openai", "anthropic"):
+    if not isinstance(upstream_format, str) or upstream_format not in ("openai", "anthropic", "gemini"):
         upstream_format = "openai"
     normalized["upstream_format"] = upstream_format
 
@@ -387,6 +406,18 @@ def _normalize_provider_block(provider_id: str, provider_config: Any) -> dict[st
     if not isinstance(upstream_messages_path, str):
         upstream_messages_path = ""
     normalized["upstream_messages_path"] = upstream_messages_path.strip()
+
+    # Upstream generate content path (gemini mode)
+    upstream_generate_path = normalized.get("upstream_generate_path", "")
+    if not isinstance(upstream_generate_path, str):
+        upstream_generate_path = ""
+    normalized["upstream_generate_path"] = upstream_generate_path.strip()
+
+    # Gemini API version (v1 or v1beta)
+    gemini_api_version = normalized.get("gemini_api_version", "v1beta")
+    if not isinstance(gemini_api_version, str) or gemini_api_version not in ("v1", "v1beta"):
+        gemini_api_version = "v1beta"
+    normalized["gemini_api_version"] = gemini_api_version
 
     # Model prefix to strip before sending upstream
     model_prefix = normalized.get("model_prefix", "")
@@ -413,12 +444,30 @@ def _normalize_provider_block(provider_id: str, provider_config: Any) -> dict[st
         fingerprint = {}
     normalized["fingerprint"] = {str(k): v for k, v in fingerprint.items() if isinstance(k, str) and v is not None}
 
-    # Custom headers (merged on top of fingerprint headers)
+# Custom headers (merged on top of fingerprint headers)
     custom_headers = normalized.get("custom_headers", {})
     if not isinstance(custom_headers, dict):
         logger.warning("'providers.%s.custom_headers' is invalid. Using empty dict.", provider_id)
         custom_headers = {}
     normalized["custom_headers"] = {str(k): str(v) for k, v in custom_headers.items() if isinstance(k, str) and v is not None}
+
+    # Reasoning mode
+    reasoning_mode = normalized.get("reasoning_mode", "")
+    if not isinstance(reasoning_mode, str) or reasoning_mode not in REASONING_MODES:
+        reasoning_mode = ""
+    normalized["reasoning_mode"] = reasoning_mode
+
+    # Reasoning effort (acts as default when client doesn't specify)
+    reasoning_effort = normalized.get("reasoning_effort", "")
+    if not isinstance(reasoning_effort, str):
+        reasoning_effort = ""
+    if reasoning_effort and reasoning_effort not in VALID_REASONING_EFFORTS:
+        logger.warning(
+            "'providers.%s.reasoning_effort' unrecognized: '%s'. Must be one of %s.",
+            provider_id, reasoning_effort, sorted(VALID_REASONING_EFFORTS),
+        )
+        reasoning_effort = ""
+    normalized["reasoning_effort"] = reasoning_effort
 
     return normalized
 
@@ -452,11 +501,15 @@ def build_provider_registry(config_data: dict[str, Any]) -> dict[str, ProviderRu
             upstream_format=str(normalized["upstream_format"]),
             upstream_chat_path=str(normalized["upstream_chat_path"]),
             upstream_messages_path=str(normalized["upstream_messages_path"]),
+            upstream_generate_path=str(normalized.get("upstream_generate_path", "")),
+            gemini_api_version=str(normalized.get("gemini_api_version", "v1beta")),
             model_prefix=str(normalized["model_prefix"]),
             default_max_tokens=int(normalized["default_max_tokens"]),
             inject_billing=bool(normalized["inject_billing"]),
             fingerprint=dict(normalized.get("fingerprint", {})),
             custom_headers=dict(normalized.get("custom_headers", {})),
+            reasoning_mode=str(normalized["reasoning_mode"]),
+            reasoning_effort=str(normalized["reasoning_effort"]),
         )
 
     logger.info("Loaded providers: %s", ", ".join(sorted(registry.keys())))
@@ -581,6 +634,36 @@ def normalize_request_body_for_provider(
     if provider.provider_id != "openrouter":
         for field_name in OPENROUTER_ONLY_REQUEST_FIELDS:
             body.pop(field_name, None)
+
+    # Inject reasoning/thinking parameter if provider has reasoning configured
+    # and client didn't specify any reasoning parameter
+    if provider.reasoning_effort and not body.get("reasoning") and not body.get("reasoning_effort"):
+        mode = provider.reasoning_mode
+        effort = provider.reasoning_effort
+        body = _inject_reasoning(body, mode, effort)
+
+    return body
+
+
+def _inject_reasoning(
+    body: dict[str, Any],
+    mode: str,
+    effort: str,
+) -> dict[str, Any]:
+    """Inject the reasoning/thinking parameter in the provider-specific format."""
+    budget = REASONING_EFFORT_BUDGET_MAP.get(effort, 4096)
+
+    if mode == REASONING_MODE_ENABLE_FLAG:
+        body["enable_thinking"] = True
+    elif mode == REASONING_MODE_CHAT_TEMPLATE:
+        if "chat_template_kwargs" not in body:
+            body["chat_template_kwargs"] = {}
+        body["chat_template_kwargs"]["enable_thinking"] = True
+        body["chat_template_kwargs"]["thinking_budget"] = budget
+    else:
+        # openai_reasoning (default), anthropic_thinking — both use reasoning object
+        # for anthropic, the protocol translator converts reasoning → thinking later
+        body["reasoning"] = {"effort": effort}
 
     return body
 

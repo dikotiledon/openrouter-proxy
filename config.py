@@ -49,6 +49,57 @@ def normalize_and_validate_config(config_data: Dict[str, Any]):
     and validates the structure and types, logging warnings/errors.
     Modifies the config_data dictionary in place.
     """
+    # --- Server Section ---
+    if not isinstance(config_data.get("server"), dict):
+        logger.warning("'server' section missing or invalid in config.yml. Using defaults.")
+        config_data["server"] = {}
+    server_config = config_data["server"]
+
+    default_host = "0.0.0.0"
+    if not isinstance(server_config.get("host"), str):
+        logger.warning(
+            "'server.host' missing or invalid in config.yml. Using default: '%s'",
+            default_host,
+        )
+        server_config["host"] = default_host
+
+    default_port = 5555
+    port = server_config.get("port")
+    if not isinstance(port, int):
+        logger.warning(
+            "'server.port' missing or invalid in config.yml. Using default: %d",
+            default_port,
+        )
+        server_config["port"] = default_port
+    elif port < 1 or port > 65535:
+        logger.warning(
+            "'server.port' out of range (1-65535) in config.yml. Using default: %d",
+            default_port,
+        )
+        server_config["port"] = default_port
+
+    default_access_key = ""
+    access_key = server_config.get("access_key")
+    if not isinstance(access_key, str) or not access_key:
+        logger.warning(
+            "'server.access_key' missing or empty in config.yml. "
+            "Proxy will reject all authenticated requests.",
+        )
+        server_config["access_key"] = default_access_key
+    elif access_key.lower() in {
+        "your_local_access_key_here",
+        "your_access_key_here",
+        "changeme",
+        "replace_me",
+        "your_key_here",
+        "example_key",
+    }:
+        logger.warning(
+            "'server.access_key' appears to be a placeholder ('%s'). "
+            "Please set a real access key before deploying.",
+            access_key,
+        )
+
     providers_config = config_data.get("providers")
     use_provider_registry = isinstance(providers_config, dict) and bool(providers_config)
 
