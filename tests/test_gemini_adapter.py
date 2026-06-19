@@ -113,11 +113,7 @@ class TestOpenAIToGemini:
         assert result["toolConfig"]["includeServerSideToolInvocations"] is True
         assert "function_calling_config" not in result["toolConfig"]
         assert "include_server_side_tool_invocations" not in result["toolConfig"]
-        assert "tool_config" in result
-        assert "function_calling_config" in result["tool_config"]
-        assert "include_server_side_tool_invocations" in result["tool_config"]
-        assert "functionCallingConfig" not in result["tool_config"]
-        assert "includeServerSideToolInvocations" not in result["tool_config"]
+        assert "tool_config" not in result
 
     def test_tools_without_tool_choice_gets_default_config(self):
         body = {
@@ -137,11 +133,7 @@ class TestOpenAIToGemini:
         assert result["toolConfig"]["includeServerSideToolInvocations"] is True
         assert "function_calling_config" not in result["toolConfig"]
         assert "include_server_side_tool_invocations" not in result["toolConfig"]
-        assert "tool_config" in result
-        assert "function_calling_config" in result["tool_config"]
-        assert "include_server_side_tool_invocations" in result["tool_config"]
-        assert "functionCallingConfig" not in result["tool_config"]
-        assert "includeServerSideToolInvocations" not in result["tool_config"]
+        assert "tool_config" not in result
 
     def test_reasoning_translation(self):
         body = {
@@ -273,11 +265,7 @@ class TestAnthropicToGemini:
         assert result["toolConfig"]["includeServerSideToolInvocations"] is True
         assert "function_calling_config" not in result["toolConfig"]
         assert "include_server_side_tool_invocations" not in result["toolConfig"]
-        assert "tool_config" in result
-        assert "function_calling_config" in result["tool_config"]
-        assert "include_server_side_tool_invocations" in result["tool_config"]
-        assert "functionCallingConfig" not in result["tool_config"]
-        assert "includeServerSideToolInvocations" not in result["tool_config"]
+        assert "tool_config" not in result
 
 
 class TestGeminiToAnthropic:

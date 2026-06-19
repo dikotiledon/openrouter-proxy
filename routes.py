@@ -706,8 +706,19 @@ async def proxy_endpoint(
 
         upstream_path = translate_request_path(request_path, client_prefix)
 
+        model_name = request_body.get("model", "") if request_body else ""
+        upstream_model = model_name.split("/")[-1].lower() if "/" in model_name else model_name.lower()
+        effective_upstream_format = provider.upstream_format
+        if effective_upstream_format in ("gemini", "auto"):
+            if "claude" in upstream_model or "sonnet" in upstream_model or "opus" in upstream_model:
+                effective_upstream_format = "anthropic"
+            elif "gemini" in upstream_model:
+                effective_upstream_format = "gemini"
+            elif effective_upstream_format == "auto":
+                effective_upstream_format = "openai"
+
         # Anthropic-mode providers (AgentRouter) need full request translation
-        if provider.upstream_format == "anthropic" and normalized_path == "/chat/completions":
+        if effective_upstream_format == "anthropic" and normalized_path == "/chat/completions":
             return await proxy_anthropic_with_httpx(
                 request,
                 provider,
@@ -719,7 +730,7 @@ async def proxy_endpoint(
             )
 
         # Gemini-mode providers need request translation
-        if provider.upstream_format == "gemini" and normalized_path == "/chat/completions":
+        if effective_upstream_format == "gemini" and normalized_path == "/chat/completions":
             return await proxy_openai_to_gemini(
                 request,
                 provider,
@@ -776,13 +787,26 @@ async def handle_responses_endpoint(
       anthropic → translate Responses→Anthropic
       gemini    → translate Responses→Gemini
     """
-    if provider.upstream_format == "anthropic":
-        if content_bytes is None:
-            content_bytes = await request.body()
-        try:
-            request_body = json.loads(content_bytes)
-        except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if content_bytes is None:
+        content_bytes = await request.body()
+    try:
+        request_body = json.loads(content_bytes)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    model_name = request_body.get("model", "")
+    upstream_model = model_name.split("/")[-1].lower() if "/" in model_name else model_name.lower()
+    
+    effective_upstream_format = provider.upstream_format
+    if effective_upstream_format in ("gemini", "auto"):
+        if "claude" in upstream_model or "sonnet" in upstream_model or "opus" in upstream_model:
+            effective_upstream_format = "anthropic"
+        elif "gemini" in upstream_model:
+            effective_upstream_format = "gemini"
+        elif effective_upstream_format == "auto":
+            effective_upstream_format = "openai"
+
+    if effective_upstream_format == "anthropic":
         try:
             anthropic_body = translate_responses_to_anthropic(
                 request_body,
@@ -796,13 +820,7 @@ async def handle_responses_endpoint(
             request_body=anthropic_body,
         )
 
-    if provider.upstream_format == "gemini":
-        if content_bytes is None:
-            content_bytes = await request.body()
-        try:
-            request_body = json.loads(content_bytes)
-        except (json.JSONDecodeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if effective_upstream_format == "gemini":
         return await proxy_responses_to_gemini(request, provider, request_body, api_key, is_stream)
 
     return await proxy_with_httpx(
@@ -1025,11 +1043,14 @@ async def proxy_anthropic_with_httpx(
             await upstream_resp.aclose()
 
         result = decoder.build_final_response()
+        if is_responses_path(normalized_path):
+            result = _openai_chat_response_to_responses(result)
         return JSONResponse(content=result, status_code=200)
 
     # Streaming: translate Anthropic SSE → OpenAI SSE chunks
     async def translated_sse():
         decoder = AnthropicStreamDecoder(model_name)
+        is_responses = is_responses_path(normalized_path)
         event_name = ""
         data_lines: list[str] = []
         try:
@@ -1039,8 +1060,13 @@ async def proxy_anthropic_with_httpx(
                     # Process accumulated event
                     chunk = decoder.process_sse_lines(data_lines)
                     if chunk is not None:
-                        output = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                        yield output.encode("utf-8")
+                        if is_responses:
+                            resp_events = _openai_chat_chunk_to_responses(chunk)
+                            for resp_chunk in resp_events:
+                                yield f"data: {json.dumps(resp_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+                        else:
+                            output = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                            yield output.encode("utf-8")
                     event_name = ""
                     data_lines = []
                     continue
@@ -1054,7 +1080,12 @@ async def proxy_anthropic_with_httpx(
             if data_lines:
                 chunk = decoder.process_sse_lines(data_lines)
                 if chunk is not None:
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+                    if is_responses:
+                        resp_events = _openai_chat_chunk_to_responses(chunk)
+                        for resp_chunk in resp_events:
+                            yield f"data: {json.dumps(resp_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+                    else:
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
             yield b"data: [DONE]\n\n"
         except Exception as e:
             logger.exception("[%s] SSE translation error", provider.provider_id)
@@ -1550,6 +1581,9 @@ async def proxy_openai_to_gemini(
         except (json.JSONDecodeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid JSON body")
 
+    print(f"=== OPENAI REQUEST TO GEMINI TRANSLATION ===")
+    print(f"INCOMING OPENAI: {json.dumps(request_body, indent=2)}")
+
     try:
         gemini_body, model_name = translate_openai_to_gemini(
             request_body,
@@ -1565,6 +1599,11 @@ async def proxy_openai_to_gemini(
     upstream_url = f"{provider.base_url}{generate_path}"
 
     gemini_payload = json.dumps(gemini_body, ensure_ascii=False).encode("utf-8")
+    try:
+        print(f"OUTGOING GEMINI: {gemini_payload.decode('utf-8')}".encode('cp1252', errors='replace').decode('cp1252'))
+        print("============================================")
+    except Exception:
+        pass
 
     await provider.request_pacer.wait()
     client = await get_async_client(request)
@@ -1618,28 +1657,17 @@ async def proxy_openai_to_gemini(
 
 
 async def _read_gemini_response(upstream_resp: httpx.Response) -> Optional[dict[str, Any]]:
-    """Read a Gemini response (SSE or plain JSON) and return the parsed data."""
+    """Read a Gemini response (plain JSON) and return the parsed data."""
     resp_data: Optional[dict[str, Any]] = None
     try:
-        async for line in upstream_resp.aiter_lines():
-            line = line.strip()
-            if line.startswith("data: "):
-                try:
-                    resp_data = json.loads(line[6:])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-        if resp_data is None:
+        content = await upstream_resp.aread()
+        if content:
             try:
-                content = await upstream_resp.aread()
-                if content:
-                    try:
-                        resp_data = json.loads(content)
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-            except Exception:
-                logger.debug("Error reading Gemini response fallback body")
+                resp_data = json.loads(content)
+            except (json.JSONDecodeError, ValueError):
+                logger.debug("Failed to decode JSON from upstream")
     except Exception:
-        logger.debug("Error reading Gemini response")
+        logger.debug("Error reading Gemini response body")
     finally:
         await upstream_resp.aclose()
     return resp_data
@@ -2009,6 +2037,17 @@ async def _proxy_gemini_passthrough(
 
     # Inject toolConfig and tool_config when tools are present
     if request_body.get("tools"):
+        # Strip built-in tools like googleSearch because the 8045 proxy (Vertex AI SDK)
+        # drops includeServerSideToolInvocations, causing Vertex AI to throw an error
+        # when custom functions are mixed with built-in tools.
+        cleaned_tools = []
+        for tool in request_body["tools"]:
+            if isinstance(tool, dict):
+                # Keep only functionDeclarations
+                if "functionDeclarations" in tool:
+                    cleaned_tools.append({"functionDeclarations": tool["functionDeclarations"]})
+        request_body["tools"] = cleaned_tools
+
         mode = "AUTO"
         allowed_names = None
 
@@ -2026,9 +2065,10 @@ async def _proxy_gemini_passthrough(
                 mode = fcc_s.get("mode") or mode or "AUTO"
                 allowed_names = fcc_s.get("allowed_function_names") or allowed_names
 
-        tc_camel_clean, tc_snake_clean = build_gemini_tool_config(mode, allowed_names)
+        tc_camel_clean = build_gemini_tool_config(mode, allowed_names)
         request_body["toolConfig"] = tc_camel_clean
-        request_body["tool_config"] = tc_snake_clean
+        if "tool_config" in request_body:
+            del request_body["tool_config"]
 
     api_version = provider.gemini_api_version or "v1beta"
     endpoint = ":streamGenerateContent?alt=sse" if is_stream else ":generateContent"
@@ -2305,7 +2345,7 @@ def _anthropic_response_to_gemini(anthropic_resp: dict[str, Any], model: str) ->
         elif btype == "thinking":
             parts.append({"thought": True, "text": block.get("thinking", "")})
         elif btype == "tool_use":
-            parts.append({"functionCall": {"name": block.get("name", ""), "args": block.get("input", {})}})
+            parts.append({"functionCall": {"name": block.get("name", ""), "args": block.get("input", {}), "id": block.get("id")}})
 
     stop_reason = anthropic_resp.get("stop_reason", "end_turn")
     stop_map = {"end_turn": "STOP", "max_tokens": "MAX_TOKENS", "tool_use": "STOP"}

@@ -185,6 +185,10 @@ def _openai_tools_to_gemini(tools: list[dict[str, Any]]) -> list[dict[str, Any]]
         name = func.get("name", "")
         if not name:
             continue
+        if name == "google_search":
+            name = "google_search_proxy_renamed"
+        if name == "web_search":
+            name = "web_search_proxy_renamed"
         params = func.get("parameters")
         if params is None:
             params = {"type": "OBJECT", "properties": {}}
@@ -201,11 +205,10 @@ def _openai_tools_to_gemini(tools: list[dict[str, Any]]) -> list[dict[str, Any]]
 def build_gemini_tool_config(
     mode: str = "AUTO",
     allowed_names: Optional[list[str]] = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Build clean camelCase toolConfig and snake_case tool_config dictionaries.
+) -> dict[str, Any]:
+    """Build clean camelCase toolConfig dictionary.
 
     All sub-keys inside toolConfig must be camelCase.
-    All sub-keys inside tool_config must be snake_case.
     """
     tc_camel: dict[str, Any] = {
         "functionCallingConfig": {
@@ -216,16 +219,7 @@ def build_gemini_tool_config(
     if allowed_names:
         tc_camel["functionCallingConfig"]["allowedFunctionNames"] = allowed_names
 
-    tc_snake: dict[str, Any] = {
-        "function_calling_config": {
-            "mode": mode
-        },
-        "include_server_side_tool_invocations": True
-    }
-    if allowed_names:
-        tc_snake["function_calling_config"]["allowed_function_names"] = allowed_names
-
-    return tc_camel, tc_snake
+    return tc_camel
 
 
 def _openai_tool_choice_to_gemini(choice: Any) -> Optional[dict[str, Any]]:
@@ -395,9 +389,8 @@ def translate_openai_to_gemini(
                     mode = "ANY"
                     allowed_names = [name]
                     
-        tc_camel, tc_snake = build_gemini_tool_config(mode, allowed_names)
+        tc_camel = build_gemini_tool_config(mode, allowed_names)
         body["toolConfig"] = tc_camel
-        body["tool_config"] = tc_snake
 
     body["safetySettings"] = DEFAULT_GEMINI_SAFETY_SETTINGS
     return body, model
@@ -430,13 +423,19 @@ def _gemini_parts_to_openai_content(
         if "functionCall" in part:
             fc = part["functionCall"]
             name = fc.get("name", "")
+            if name == "google_search_proxy_renamed":
+                name = "google_search"
+            elif name == "web_search_proxy_renamed":
+                name = "web_search"
             args = fc.get("args", {})
-            if func_name_to_tool_id and name in func_name_to_tool_id:
-                tool_call_id = func_name_to_tool_id[name]
-            else:
-                tool_call_id = f"call_{_random_hex(12)}"
-                if func_name_to_tool_id is not None and name:
-                    func_name_to_tool_id[name] = tool_call_id
+            tool_call_id = fc.get("id")
+            if not tool_call_id:
+                if func_name_to_tool_id and name in func_name_to_tool_id:
+                    tool_call_id = func_name_to_tool_id[name]
+                else:
+                    tool_call_id = f"call_{_random_hex(12)}"
+                    if func_name_to_tool_id is not None and name:
+                        func_name_to_tool_id[name] = tool_call_id
             tool_calls.append({
                 "id": tool_call_id,
                 "type": "function",
@@ -463,6 +462,8 @@ def _gemini_tools_to_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]
             name = decl.get("name", "")
             if not name:
                 continue
+            if name == "google_search_proxy_renamed":
+                name = "google_search"
             params = decl.get("parameters")
             if params:
                 params = _gemini_schema_to_openai_schema(params)
@@ -490,7 +491,10 @@ def _gemini_tool_config_to_openai(tool_config: Any) -> Optional[Any]:
     if mode == "ANY":
         allowed = fcc.get("allowedFunctionNames", [])
         if len(allowed) == 1:
-            return {"type": "function", "function": {"name": allowed[0]}}
+            name = allowed[0]
+            if name == "google_search_proxy_renamed":
+                name = "google_search"
+            return {"type": "function", "function": {"name": name}}
         return "required"
     return None
 
@@ -538,54 +542,56 @@ def translate_gemini_to_openai(
         parts = content.get("parts", [])
 
         if role == "user":
-            has_func_resp = any(isinstance(p, dict) and "functionResponse" in p for p in parts)
-            if has_func_resp:
-                for part in parts:
-                    if isinstance(part, dict) and "functionResponse" in part:
-                        fr = part["functionResponse"]
-                        func_name = fr.get("name", "")
-                        resp = fr.get("response", {})
-                        result_text = resp.get("result", "")
-                        if isinstance(result_text, dict):
-                            result_text = json.dumps(result_text, ensure_ascii=False)
-                        tool_call_id = fr.get("id") or func_name_to_tool_id.get(func_name)
-                        if not tool_call_id:
-                            tool_call_id = f"call_{_random_hex(12)}"
-                            func_name_to_tool_id[func_name] = tool_call_id
-                        openai_messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call_id,
-                            "name": fr.get("name", "unknown"),
-                            "content": str(result_text),
-                        })
-            else:
-                openai_parts: list[dict[str, Any]] = []
-                for part in parts:
-                    if not isinstance(part, dict):
-                        continue
-                    if "text" in part:
-                        openai_parts.append({"type": "text", "text": part["text"]})
-                    elif "inlineData" in part:
-                        data = part["inlineData"]
-                        mime = data.get("mimeType", "image/png")
-                        b64 = data.get("data", "")
+            openai_parts: list[dict[str, Any]] = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if "functionResponse" in part:
+                    fr = part["functionResponse"]
+                    func_name = fr.get("name", "")
+                    if func_name == "google_search_proxy_renamed":
+                        func_name = "google_search"
+                    resp = fr.get("response", {})
+                    if "result" in resp and len(resp) == 1:
+                        result_val = resp["result"]
+                        if isinstance(result_val, (dict, list)):
+                            result_text = json.dumps(result_val, ensure_ascii=False)
+                        else:
+                            result_text = str(result_val)
+                    else:
+                        result_text = json.dumps(resp, ensure_ascii=False)
+                    tool_call_id = fr.get("id") or func_name_to_tool_id.get(func_name)
+                    if not tool_call_id:
+                        tool_call_id = f"call_{_random_hex(12)}"
+                        func_name_to_tool_id[func_name] = tool_call_id
+                    openai_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": func_name,
+                        "content": str(result_text),
+                    })
+                elif "text" in part:
+                    openai_parts.append({"type": "text", "text": part["text"]})
+                elif "inlineData" in part:
+                    data = part["inlineData"]
+                    mime = data.get("mimeType", "image/png")
+                    b64 = data.get("data", "")
+                    if b64:
                         openai_parts.append({
                             "type": "image_url",
                             "image_url": {"url": f"data:{mime};base64,{b64}"},
                         })
-                    elif "fileData" in part:
-                        fd = part["fileData"]
-                        openai_parts.append({
-                            "type": "image_url",
-                            "image_url": {"url": fd.get("fileUri", "")},
-                        })
+                elif "fileData" in part:
+                    fd = part["fileData"]
+                    openai_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": fd.get("fileUri", "")},
+                    })
+            if openai_parts:
                 if len(openai_parts) == 1 and openai_parts[0].get("type") == "text":
                     openai_messages.append({"role": "user", "content": openai_parts[0]["text"]})
                 else:
-                    openai_messages.append({
-                        "role": "user",
-                        "content": openai_parts or [{"type": "text", "text": ""}],
-                    })
+                    openai_messages.append({"role": "user", "content": openai_parts})
 
         elif role == "model":
             content_text, tool_calls, reasoning_details = _gemini_parts_to_openai_content(parts, func_name_to_tool_id=func_name_to_tool_id)
@@ -653,6 +659,8 @@ def _anthropic_tools_to_gemini(tools: list[dict[str, Any]]) -> list[dict[str, An
         name = tool.get("name", "")
         if not name:
             continue
+        if name == "google_search":
+            name = "google_search_proxy_renamed"
         params = tool.get("input_schema")
         if params:
             params = _openai_schema_to_gemini_schema(params)
@@ -678,6 +686,8 @@ def _anthropic_tool_choice_to_gemini(choice: Any) -> Optional[dict[str, Any]]:
             return {"functionCallingConfig": {"mode": "AUTO"}}
         if ctype == "tool":
             name = choice.get("name", "")
+            if name == "google_search":
+                name = "google_search_proxy_renamed"
             if name:
                 return {"functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": [name]}}
     return None
@@ -860,13 +870,14 @@ def translate_anthropic_to_gemini(
                     mode = "AUTO"
                 elif ctype == "tool":
                     name = choice.get("name", "")
+                    if name == "google_search":
+                        name = "google_search_proxy_renamed"
                     if name:
                         mode = "ANY"
                         allowed_names = [name]
                         
-        tc_camel, tc_snake = build_gemini_tool_config(mode, allowed_names)
+        tc_camel = build_gemini_tool_config(mode, allowed_names)
         body["toolConfig"] = tc_camel
-        body["tool_config"] = tc_snake
 
     body["safetySettings"] = DEFAULT_GEMINI_SAFETY_SETTINGS
     return body, model
@@ -886,6 +897,8 @@ def _gemini_tools_to_anthropic(tools: list[dict[str, Any]]) -> list[dict[str, An
             name = decl.get("name", "")
             if not name:
                 continue
+            if name == "google_search_proxy_renamed":
+                name = "google_search"
             params = decl.get("parameters")
             if params:
                 params = _gemini_schema_to_openai_schema(params)
@@ -939,43 +952,46 @@ def translate_gemini_to_anthropic(
         parts = content.get("parts", [])
 
         if role == "user":
-            has_func_resp = any(isinstance(p, dict) and "functionResponse" in p for p in parts)
-            if has_func_resp:
-                for part in parts:
-                    if isinstance(part, dict) and "functionResponse" in part:
-                        fr = part["functionResponse"]
-                        func_name = fr.get("name", "")
-                        resp = fr.get("response", {})
-                        result_text = resp.get("result", "")
-                        if isinstance(result_text, dict):
-                            result_text = json.dumps(result_text, ensure_ascii=False)
-                        tool_use_id = fr.get("id") or _func_name_to_tool_id.get(func_name)
-                        if not tool_use_id:
-                            tool_use_id = f"toolu_{_random_hex(12)}"
-                            _func_name_to_tool_id[func_name] = tool_use_id
-                        anthropic_messages = _append_or_merge(
-                            anthropic_messages, "user",
-                            [{"type": "tool_result", "tool_use_id": tool_use_id, "content": str(result_text)}],
-                        )
-            else:
-                blocks: list[dict[str, Any]] = []
-                for part in parts:
-                    if not isinstance(part, dict):
-                        continue
-                    if "text" in part:
-                        blocks.append({"type": "text", "text": part["text"]})
-                    elif "inlineData" in part:
-                        data = part["inlineData"]
-                        blocks.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": data.get("mimeType", "image/png"),
-                                "data": data.get("data", ""),
-                            },
-                        })
-                if blocks:
-                    anthropic_messages = _append_or_merge(anthropic_messages, "user", blocks)
+            blocks: list[dict[str, Any]] = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if "functionResponse" in part:
+                    fr = part["functionResponse"]
+                    func_name = fr.get("name", "")
+                    if func_name == "google_search_proxy_renamed":
+                        func_name = "google_search"
+                    resp = fr.get("response", {})
+                    if "result" in resp and len(resp) == 1:
+                        result_val = resp["result"]
+                        if isinstance(result_val, (dict, list)):
+                            result_text = json.dumps(result_val, ensure_ascii=False)
+                        else:
+                            result_text = str(result_val)
+                    else:
+                        result_text = json.dumps(resp, ensure_ascii=False)
+                    tool_use_id = fr.get("id") or _func_name_to_tool_id.get(func_name)
+                    if not tool_use_id:
+                        tool_use_id = f"toolu_{_random_hex(12)}"
+                        _func_name_to_tool_id[func_name] = tool_use_id
+                    anthropic_messages = _append_or_merge(
+                        anthropic_messages, "user",
+                        [{"type": "tool_result", "tool_use_id": tool_use_id, "content": str(result_text)}],
+                    )
+                elif "text" in part:
+                    blocks.append({"type": "text", "text": part["text"]})
+                elif "inlineData" in part:
+                    data = part["inlineData"]
+                    blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": data.get("mimeType", "image/png"),
+                            "data": data.get("data", ""),
+                        },
+                    })
+            if blocks:
+                anthropic_messages = _append_or_merge(anthropic_messages, "user", blocks)
 
         elif role == "model":
             blocks = []
@@ -989,6 +1005,8 @@ def translate_gemini_to_anthropic(
                 elif "functionCall" in part:
                     fc = part["functionCall"]
                     func_name = fc.get("name", "")
+                    if func_name == "google_search_proxy_renamed":
+                        func_name = "google_search"
                     tool_use_id = fc.get("id") or _func_name_to_tool_id.get(func_name)
                     if not tool_use_id:
                         tool_use_id = f"toolu_{_random_hex(12)}"
@@ -1155,10 +1173,15 @@ def translate_gemini_response_to_anthropic(gemini_data: dict[str, Any], model: s
                 content_blocks.append({"type": "text", "text": part["text"]})
             elif "functionCall" in part:
                 fc = part["functionCall"]
+                func_name = fc.get("name", "")
+                if func_name == "google_search_proxy_renamed":
+                    func_name = "google_search"
+                elif func_name == "web_search_proxy_renamed":
+                    func_name = "web_search"
                 content_blocks.append({
                     "type": "tool_use",
                     "id": fc.get("id") or f"toolu_{_random_hex(12)}",
-                    "name": fc.get("name", ""),
+                    "name": func_name,
                     "input": fc.get("args", {}),
                 })
 
@@ -1251,6 +1274,8 @@ class GeminiStreamDecoder:
                 fc = part["functionCall"]
                 call_id = fc.get("id") or f"call_{_random_hex(12)}"
                 name = fc.get("name", "")
+                if name == "google_search_proxy_renamed":
+                    name = "google_search"
                 args = fc.get("args", {})
                 tc = {
                     "id": call_id,
@@ -1401,6 +1426,10 @@ class GeminiAnthropicStreamDecoder:
                 fc = part["functionCall"]
                 call_id = fc.get("id") or f"toolu_{_random_hex(12)}"
                 name = fc.get("name", "")
+                if name == "google_search_proxy_renamed":
+                    name = "google_search"
+                elif name == "web_search_proxy_renamed":
+                    name = "web_search"
                 args = fc.get("args", {})
                 result += self._close_current_block()
                 result += self._emit_event("content_block_start", {
@@ -1502,10 +1531,12 @@ class OpenAIToGeminiSSETranslator:
                 args_str = func.get("arguments", "")
 
                 if idx not in self._pending_tool_calls:
-                    self._pending_tool_calls[idx] = {"name": "", "args_buf": ""}
+                    self._pending_tool_calls[idx] = {"name": "", "args_buf": "", "id": tc.get("id", "")}
 
                 if name:
                     self._pending_tool_calls[idx]["name"] = name
+                if tc.get("id"):
+                    self._pending_tool_calls[idx]["id"] = tc.get("id")
                 if args_str:
                     self._pending_tool_calls[idx]["args_buf"] += args_str
 
@@ -1522,7 +1553,9 @@ class OpenAIToGeminiSSETranslator:
                         args = json.loads(pending["args_buf"]) if pending["args_buf"] else {}
                     except (json.JSONDecodeError, TypeError):
                         args = {}
-                    tc_obj = {"name": name, "args": args}
+                    tc_obj: dict[str, Any] = {"name": name, "args": args}
+                    if pending.get("id"):
+                        tc_obj["id"] = pending["id"]
                     self._tool_calls.append(tc_obj)
                     parts.append({"functionCall": tc_obj})
             self._pending_tool_calls.clear()
@@ -1594,6 +1627,7 @@ class AnthropicToGeminiSSETranslator:
         self._tool_calls: list[dict[str, Any]] = []
         self._pending_tool_name: str = ""
         self._pending_tool_args_buf: str = ""
+        self._pending_tool_id: str = ""
         self._finished = False
         self._finish_reason = "STOP"
         self._input_tokens = 0
@@ -1611,6 +1645,7 @@ class AnthropicToGeminiSSETranslator:
             block = data.get("content_block", {})
             if block.get("type") == "tool_use":
                 self._pending_tool_name = block.get("name", "")
+                self._pending_tool_id = block.get("id", "")
                 self._pending_tool_args_buf = ""
             return None
 
@@ -1653,10 +1688,13 @@ class AnthropicToGeminiSSETranslator:
                     args = json.loads(self._pending_tool_args_buf) if self._pending_tool_args_buf else {}
                 except (json.JSONDecodeError, TypeError):
                     args = {}
-                tc = {"name": self._pending_tool_name, "args": args}
+                tc: dict[str, Any] = {"name": self._pending_tool_name, "args": args}
+                if self._pending_tool_id:
+                    tc["id"] = self._pending_tool_id
                 self._tool_calls.append(tc)
                 self._pending_tool_name = ""
                 self._pending_tool_args_buf = ""
+                self._pending_tool_id = ""
             return None
 
         if event_type == "message_delta":

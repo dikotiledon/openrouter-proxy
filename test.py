@@ -21,11 +21,11 @@ def env_flag(name: str, default: bool = False) -> bool:
 
 API_MODE = os.environ.get("API_MODE", "responses").strip().lower()
 DEFAULT_MODELS = {
-    "responses": "deepseek/deepseek-r1:free",
-    "chat": "deepseek/deepseek-r1:free",
+    "responses": "gemini/claude-sonnet-4-6",
+    "chat": "gemini/claude-sonnet-4-6",
     "embeddings": "openai/text-embedding-3-small",
 }
-MODEL = os.environ.get("MODEL", DEFAULT_MODELS.get(API_MODE, "deepseek/deepseek-r1:free"))
+MODEL = os.environ.get("MODEL", DEFAULT_MODELS.get(API_MODE, "gemini/claude-sonnet-4-6"))
 STREAM = False if API_MODE == "embeddings" else True
 MAX_TOKENS = 600
 PROMPT_CACHING_ENABLED = env_flag("ENABLE_PROMPT_CACHING", False)
