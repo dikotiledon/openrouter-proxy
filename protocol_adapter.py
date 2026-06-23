@@ -16,6 +16,7 @@ import json
 import time
 import uuid
 import random
+from collections import deque
 
 from typing import Any, Optional
 
@@ -211,6 +212,7 @@ def _parse_image_url(url: str) -> dict[str, Any]:
 def _tool_calls_to_anthropic_blocks(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert OpenAI tool_calls to Anthropic tool_use blocks."""
     blocks: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
     for tc in tool_calls or []:
         func = tc.get("function", {})
         name = func.get("name", "")
@@ -219,9 +221,13 @@ def _tool_calls_to_anthropic_blocks(tool_calls: list[dict[str, Any]]) -> list[di
             input_data = json.loads(args_str) if isinstance(args_str, str) else args_str
         except (json.JSONDecodeError, TypeError):
             input_data = {}
+        call_id = tc.get("id", f"toolu_{_random_hex(12)}")
+        if call_id in seen_ids:
+            call_id = f"toolu_{_random_hex(12)}"
+        seen_ids.add(call_id)
         blocks.append({
             "type": "tool_use",
-            "id": tc.get("id", f"toolu_{_random_hex(12)}"),
+            "id": call_id,
             "name": name,
             "input": input_data if isinstance(input_data, dict) else {},
         })
@@ -288,6 +294,197 @@ def _has_billing_header(blocks: list[dict[str, Any]]) -> bool:
             if "x-anthropic-billing-header:" in block.get("text", "").lower():
                 return True
     return False
+
+
+def deduplicate_anthropic_tool_use_ids(body: dict[str, Any]) -> dict[str, Any]:
+    """Deduplicate tool_use IDs in an Anthropic Messages request body.
+
+    Some upstreams (Kiro/Bedrock) emit phantom tool_use blocks with duplicate IDs.
+    When clients store these in conversation history and send them back, Bedrock
+    rejects the request with TOOL_DUPLICATE. This function re-assigns unique IDs
+    to duplicate tool_use blocks and patches matching tool_result references.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return body
+
+    seen_ids: dict[str, int] = {}  # id → occurrence count
+    id_map: dict[str, str] = {}    # old_id → new_id (for duplicates)
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                tid = block.get("id", "")
+                if not tid:
+                    continue
+                if tid in seen_ids:
+                    seen_ids[tid] += 1
+                    new_id = f"toolu_{_random_hex(12)}"
+                    id_map[f"{tid}:{seen_ids[tid]}"] = new_id
+                    block["id"] = new_id
+                else:
+                    seen_ids[tid] = 1
+
+    if not id_map:
+        return body
+
+    # Patch tool_result blocks that reference remapped tool_use IDs
+    # We need to track which occurrence of each original ID each tool_result matches
+    occurrence_counters: dict[str, int] = {}
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                tid = block.get("tool_use_id", "")
+                if not tid:
+                    continue
+                if tid in seen_ids and seen_ids[tid] > 1:
+                    occurrence_counters[tid] = occurrence_counters.get(tid, 0) + 1
+                    map_key = f"{tid}:{occurrence_counters[tid]}"
+                    if map_key in id_map:
+                        block["tool_use_id"] = id_map[map_key]
+
+    return body
+
+
+def deduplicate_kiro_conversation_state(body: dict[str, Any]) -> dict[str, Any]:
+    """Deduplicate toolUseId values in a Kiro conversationState payload.
+
+    Kiro IDE sends requests in its own ``conversationState`` format (not OpenAI
+    ``messages``).  When the upstream Bedrock-based model emits duplicate tool_use
+    IDs, Kiro stores them verbatim.  On the next turn the proxy must deduplicate
+    these IDs before forwarding, otherwise Bedrock rejects with ``TOOL_DUPLICATE``.
+
+    Handles two paths:
+      - ``conversationState.history[].assistantResponseMessage.toolUses[].toolUseId``
+      - ``conversationState.currentMessage.userInputMessage.toolResults[].toolUseId``
+    """
+    cs = body.get("conversationState")
+    if not isinstance(cs, dict):
+        return body
+
+    seen_ids: dict[str, int] = {}
+    id_map: dict[str, str] = {}
+
+    # ── Scan toolUses in history ──────────────────────────────────────────
+    for entry in cs.get("history", []):
+        if not isinstance(entry, dict):
+            continue
+        arm = entry.get("assistantResponseMessage")
+        if not isinstance(arm, dict):
+            continue
+        tool_uses = arm.get("toolUses")
+        if not isinstance(tool_uses, list):
+            continue
+        for tu in tool_uses:
+            if not isinstance(tu, dict):
+                continue
+            tid = tu.get("toolUseId", "")
+            if not tid:
+                continue
+            if tid in seen_ids:
+                seen_ids[tid] += 1
+                new_id = f"tooluse_{_random_hex(12)}"
+                id_map[f"{tid}:{seen_ids[tid]}"] = new_id
+                tu["toolUseId"] = new_id
+            else:
+                seen_ids[tid] = 1
+
+    if not id_map:
+        return body
+
+    # ── Patch toolResults in currentMessage ───────────────────────────────
+    # Kiro nests toolResults inside userInputMessageContext:
+    #   currentMessage.userInputMessage.userInputMessageContext.toolResults
+    cm = cs.get("currentMessage")
+    if isinstance(cm, dict):
+        uim = cm.get("userInputMessage")
+        if isinstance(uim, dict):
+            # Try both direct toolResults and nested under userInputMessageContext
+            tool_results = uim.get("toolResults")
+            if not isinstance(tool_results, list):
+                ctx = uim.get("userInputMessageContext")
+                if isinstance(ctx, dict):
+                    tool_results = ctx.get("toolResults")
+            if isinstance(tool_results, list):
+                occurrence_counters: dict[str, int] = {}
+                for tr in tool_results:
+                    if not isinstance(tr, dict):
+                        continue
+                    tid = tr.get("toolUseId", "")
+                    if not tid or tid not in seen_ids or seen_ids[tid] <= 1:
+                        continue
+                    occurrence_counters[tid] = occurrence_counters.get(tid, 0) + 1
+                    map_key = f"{tid}:{occurrence_counters[tid]}"
+                    if map_key in id_map:
+                        tr["toolUseId"] = id_map[map_key]
+
+    return body
+
+
+def deduplicate_openai_tool_call_ids(body: dict[str, Any]) -> dict[str, Any]:
+    """Deduplicate tool_call IDs in an OpenAI Chat Completions request body.
+
+    When upstreams emit duplicate tool_call IDs (e.g. Kiro/Bedrock phantom blocks),
+    clients store them in history. This function re-assigns unique IDs to duplicate
+    tool_calls and patches matching tool result references.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return body
+
+    seen_ids: dict[str, int] = {}
+    id_map: dict[str, str] = {}
+
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        tool_calls = msg.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            tid = tc.get("id", "")
+            if not tid:
+                continue
+            if tid in seen_ids:
+                seen_ids[tid] += 1
+                new_id = f"call_{_random_hex(12)}"
+                id_map[f"{tid}:{seen_ids[tid]}"] = new_id
+                tc["id"] = new_id
+            else:
+                seen_ids[tid] = 1
+
+    if not id_map:
+        return body
+
+    occurrence_counters: dict[str, int] = {}
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        tid = msg.get("tool_call_id", "")
+        if not tid or tid not in seen_ids or seen_ids[tid] <= 1:
+            continue
+        occurrence_counters[tid] = occurrence_counters.get(tid, 0) + 1
+        map_key = f"{tid}:{occurrence_counters[tid]}"
+        if map_key in id_map:
+            msg["tool_call_id"] = id_map[map_key]
+
+    return body
 
 
 def translate_openai_to_anthropic(
@@ -559,12 +756,22 @@ class AnthropicStreamDecoder:
         self._reasoning_parts: list[str] = []
         self._reasoning_details: list[dict[str, Any]] = []
         self._block_type_by_index: dict[int, str] = {}
+        self._stopped_blocks: set[int] = set()
+        self._seen_tool_ids: set[str] = set()
+        self._pending_tool_starts: dict[int, dict[str, Any]] = {}
+        self._pending_chunks: deque[dict[str, Any]] = deque()
         self._finish_reason: str = "stop"
         self._usage: Optional[dict[str, Any]] = None
 
     def _reset_block(self, index: int):
         self._tool_name_by_index.pop(index, None)
         self._tool_args_by_index.pop(index, None)
+
+    def drain_pending(self) -> list[dict[str, Any]]:
+        """Return all buffered chunks from deferred tool_use starts."""
+        chunks = list(self._pending_chunks)
+        self._pending_chunks.clear()
+        return chunks
 
     def _extract_usage(self, data: dict[str, Any]) -> Optional[dict[str, Any]]:
         """Extract usage from an Anthropic message_delta/message_start event."""
@@ -620,6 +827,9 @@ class AnthropicStreamDecoder:
                     )
             elif block_type == "tool_use":
                 call_id = block.get("id", f"toolu_{_random_hex(12)}")
+                if call_id in self._seen_tool_ids:
+                    call_id = f"toolu_{_random_hex(12)}"
+                self._seen_tool_ids.add(call_id)
                 name = block.get("name", "")
                 self._tool_name_by_index[index] = name
                 self._tool_args_by_index[index] = ""
@@ -628,11 +838,14 @@ class AnthropicStreamDecoder:
                     "type": "function",
                     "function": {"name": name, "arguments": ""},
                 }
-                return _build_openai_chunk(
+                # Buffer the start chunk — only emit when we receive the first delta
+                # to avoid emitting orphan tool_use blocks from buggy upstreams
+                start_chunk = _build_openai_chunk(
                     self.chunk_id, self.created, self.model,
                     {"tool_calls": [{"index": index, "id": call_id, "type": "function",
                                      "function": {"name": name, "arguments": ""}}]},
                 )
+                self._pending_tool_starts[index] = start_chunk
             elif block_type == "redacted_thinking":
                 enc_data = block.get("data", "")
                 self._reasoning_details.append({
@@ -667,17 +880,27 @@ class AnthropicStreamDecoder:
                     self._tool_args_by_index.get(index, "") + partial_json
                 )
                 tc = self._tool_calls_by_index.get(index, {})
-                return _build_openai_chunk(
+                chunk = _build_openai_chunk(
                     self.chunk_id, self.created, self.model,
                     {"tool_calls": [{"index": index,
                                      "id": tc.get("id", ""),
                                      "type": "function",
                                      "function": {"arguments": partial_json}}]},
                 )
+                # Flush pending start chunk for this index before emitting delta
+                pending = self._pending_tool_starts.pop(index, None)
+                if pending is not None:
+                    self._pending_chunks.append(pending)
+                    self._pending_chunks.append(chunk)
+                    return self._pending_chunks.popleft()
+                return chunk
             return None
 
         if event_type == "content_block_stop":
             index = data.get("index", 0)
+            self._stopped_blocks.add(index)
+            # Discard orphan pending start if block stopped without receiving delta
+            self._pending_tool_starts.pop(index, None)
             tc = self._tool_calls_by_index.get(index)
             if tc:
                 args = self._tool_args_by_index.get(index, "").strip()
@@ -726,12 +949,18 @@ class AnthropicStreamDecoder:
         if self._tool_calls_by_index:
             tool_calls = []
             for idx in sorted(self._tool_calls_by_index.keys()):
+                # Skip orphan tool_use blocks that never received content_block_stop
+                # (some upstreams emit phantom content_block_start events)
+                if idx not in self._stopped_blocks:
+                    continue
                 tc = self._tool_calls_by_index[idx]
                 tool_calls.append({
                     "id": tc["id"],
                     "type": "function",
                     "function": tc["function"],
                 })
+            if not tool_calls:
+                tool_calls = None
 
         # Determine final finish reason
         finish = self._finish_reason

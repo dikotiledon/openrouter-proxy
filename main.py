@@ -34,11 +34,6 @@ if __name__ == "__main__":
     # If host is 0.0.0.0, use actual local IP for display
     display_host = get_local_ip() if host == "0.0.0.0" else host
 
-    logger.warning("Starting OpenRouter OpenAI-Compatible Proxy on %s:%s", host, port)
-    logger.warning("OpenAI-compatible API URL: http://%s:%s/v1", display_host, port)
-    logger.warning("OpenRouter-style API URL: http://%s:%s/api/v1", display_host, port)
-    logger.info("Health check: http://%s:%s/health", display_host, port)
-
     # Configure log level for HTTP access logs
     log_config = uvicorn.config.LOGGING_CONFIG
     http_log_level = config["server"].get("http_log_level", "INFO").upper()

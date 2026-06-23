@@ -1,0 +1,242 @@
+# OpenRouter Proxy Configuration
+
+# Server settings
+server:
+  host: "0.0.0.0" # Default interface
+  port: 5555 # Default port
+  access_key: "sk-lm-Ql7o5B5H:H36USx7eyg6qoUA1f0bn" # Key for accessing the local proxy
+  log_level: "INFO" # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  http_log_level: "INFO" # HTTP access logs level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+
+# Provider registry
+providers:
+  kiroman:
+    base_url: "http://127.0.0.1:5580/v1"
+    keys:
+      - "sk-1779607763056"
+    allowed_models:
+      - "kiroman/auto"
+      - "kiroman/claude-sonnet-4.6"
+      - "kiroman/claude-sonnet-4.5"
+      - "kiroman/claude-haiku-4.5"
+      - "kiroman/glm-5"
+      - "kiroman/minimax-m2.5"
+    model_prefix: "kiroman/"
+    enable_thinking: true
+    reasoning_effort: "xhigh"
+    key_selection_strategy: "first"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 0
+    global_rate_delay: 3
+  gemini:
+    base_url: "http://127.0.0.1:8045"
+    keys:
+      - "sk-55accc9f87be44249867f7b495832f16"    
+    upstream_format: "gemini"
+    gemini_api_version: "v1beta"
+    model_prefix: "gemini/"
+    default_max_tokens: 8192
+    allowed_models:
+      - "gemini/gemini-pro-agent"
+      - "gemini/gemini-3.1-pro-high"
+      - "gemini/gemini-3-flash-agent"
+      - "gemini/claude-sonnet-4-6"
+      - "gemini/claude-opus-4-6-thinking"
+    key_selection_strategy: "first"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 3
+  mimo:
+    base_url: "https://token-plan-sgp.xiaomimimo.com/v1"
+    keys:
+      - "tp-s2808p6wc3rx0180osgs6ufr9sjesecdg9a8dwv3d3hh6opg"
+    allowed_models:
+      - "mimo/mimo-v2.5-pro"
+    model_prefix: "mimo/"      
+    key_selection_strategy: "first"
+    key_selection_opts: []
+    enable_thinking: true  
+    reasoning_mode: "openai_reasoning"
+    reasoning_effort: "xhigh"
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 0
+    global_rate_delay: 0
+  aliman:
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    keys:
+      - "sk-ws-H.ILEYRR.WCvO.MEQCIDl8nONgMXCOsvHWrT1Ryzm47qDQR2MRq1xVqWC52XgpAiAFborTHbUJ3TGgdkPFuzY2u0WmL08hSFd7cTmXm31n_A"
+      - "sk-ws-H.ILEYRP.hsv0.MEUCIQDPp-1rvAdKLIjjlnujmTLc9D_kDLSSg_avFC_ySlST2gIgYbZgx29HV8knxX99NzjNsGcvw6zoX81SunF3VFk94Sc"
+      - "sk-ws-H.ILEYEM.j4h8.MEQCIC5mUmi4j_6y5hb0e9-qsunQUUATm8dc8arzEqUvW3PvAiB75R784FXDKGRcYIbXFEF0vV0TyGJgjSh1Rvc6UE517w"
+      - "sk-ws-H.ILEYEI.UrES.MEQCIERSE3xinacW5jghqUt7LKRsrcMaND2G15xfw5X5P81dAiBqTXqefGIAbonWfG97TwsJo83J3K-VG6p3lXaw0h4y5g"
+      - "sk-ws-H.ILEYEP.FsB7.MEUCIQCdse6wcYZS3CWrqV5Of4325x5-1IQxQ1zoaoTF0RmHzQIgeNon505GoDlNR8HyAx15UIitTnE36gKIhPK904n_QfA"
+      - "sk-ws-H.ILEYPD.3TFc.MEYCIQDMGrZgmA0Ep8vihlVZUAAehXYMQH7PwQW3qC_i844oRgIhAKyp7NOOQDkuLb6dlhfy4-VUy0W06dP7ST-GamYr__r9"
+      - "sk-ws-H.ILEYPE.Moaq.MEUCIQCG5kIQQG9eIV53v0Zxetj5xPwv4q5rPbJiZcEfRneOgAIgFRsb9lWMHVWplhFjrZPGbGLI0Za4P6fv_CGAK_9SBjM"
+      - "sk-ws-H.ILEYPP.KzMJ.MEQCICduNjNSdZghBP_tN4e2pKrs5x6OctA0kjaPUmrsTJYSAiBzSvGxHMgsbUEDElQ285A3d3MJv6HOUzCzj7w82TsOXQ"
+      - "sk-ws-H.ILEYPY.SVax.MEUCIQCCXXF8o-SkAxAUpy124AqbJcSR10s1zwuNQiI0ce-fqwIgOroeAaZcpuY3VCoKjFAJRyfqjhL3gwgSGfzZrvp1ahI"
+      - "sk-ws-H.ILEYYD.OyPu.MEUCIQCGbmj9v5KsbCv6CtwQxvqwjr76QHeq9YOhLc9aanOkGQIgPaDRTzgz2xdUA7QqIarbvMCq9HDzOGOcQY2YSR_9b3k"
+      - "sk-ws-H.ILEYYI.CGYb.MEUCIDtPmeh7N7PJRP-9NYwQcjhx7bc29P7fGXvq5KXFlZ0rAiEAmsJlf_xOA1ykUheSWjEfX1O38t4aZasVXZbO6FtPRXk"
+      - "sk-ws-H.ILEYYE.duGg.MEYCIQCce6z1EZYbFzCxf3VZUEx5N5ViW7qKDDnU0QMUXiJ6oAIhAP2jhEqjSMgrGLB-nsjPsxv6AG41XCoxwN805fFPd1P0"
+      - "sk-ws-H.ILEYYY.9jkb.MEYCIQCvf3rYPNfZaRjKyEsmstM1WUrRefOHFa5ZqOHRNifmYAIhAJ-vVEOVzTA_tEjO3_akOkroeVQ9ICnMMxMN3hlYwRd4"
+      - "sk-ws-H.ILEYXD.t9lK.MEUCID0L8Deayhite0vvGBxQGjDcbzONP_DhDhoNjNPXnmEkAiEAkbID9HtrOMUNv_2nrApCXMLqwdQW33IRdP3iXNx407k"
+      - "sk-ws-H.ILEYXE.sLG7.MEYCIQCLt5rrgNxoTm5UoUP9FNaJpkCiLTWlttaZkluzt8hgEAIhAJESFraAHK941zKZOYy0vgmFbHPxk_Y6AhYvhf31i69Y"
+      - "sk-ws-H.ILEYXX.1ird.MEUCIQCqZNYvrYs9bTlcIU0guh7A-WpRtEoHrOJSGmIcjf93eAIgEESE992Pevmf7o93xKVFutkG3M82hIWDwjOkroF8Sx4"
+      - "sk-ws-H.ILEXMD.aFMS.MEQCIExqiWefnfeFiF48Dv5zBDZ_Q3IZsngzp9DsYCF-RLnRAiBdeo1tTEUKKgMNak18qEIjSCqXqQ4i4MTrjSZTMV1enQ"
+      - "sk-ws-H.ILEXME.Tyi2.MEYCIQDA2G9gNjmhwybaspcQwmVrZR3p3fHUfc4CJedshTmOqwIhAMSfiA0_lGTwsofc-nQMfqRAdKzyJj4D7fE4XWgg81nn"
+      - "sk-ws-H.ILEXDD.1Sxg.MEQCIC_gcFj6Doam5OcE3wMx8TS7Xg5AVR1J3iuKw3AJobOjAiA5Amxgrn84VW4Ef71FKgv6m7UTMFk4WNDvLQNh8y_jCQ"
+      - "sk-ws-H.ILEXDL.Vwil.MEUCIAmo_eEzKeonwso77El9Dsv9yrft0Ve0XjtonDRoKLxjAiEAmdRSBm4bfk-WPdplWtDm6ywJdzQDjPnjeHJ9XAAcqlk"
+      - "sk-ws-H.ILEXDX.pIxi.MEQCIHyWgCjZ4t6Mut_cN9_SzDxUgSrQanrrWjeYBZCP6pqVAiAKYlLLh8X7R9HEminbPTToMGpqXBu-1Z7UyVrS3Tz58A"
+      - "sk-ws-H.ILEXHD.spCE.MEUCIQCOW_tngHs56ZG_EbqzMaxO_QddwZYxTqktb4xg_NtUkQIgQg6M6HDqzmI07yEEBDJ93xrXGJ81IAZg9lw_740A4Ks"
+      - "sk-ws-H.ILEXHI.3QDh.MEUCIQCFScQQirJgArMxyy0V60ZRsCKmHwXtp-rQrf_8fnEdPwIgBWMKYY9zTQcrsdt6J-aFzN9pJEg1OUhXNAICet_lvfY"
+      - "sk-ws-H.ILEXHY.bLpk.MEUCIQCmp4a5o1ZAXbRbLXCzvIVVvxag2FtHZvQBo9zLJcslWAIgKOHiRcz457aOIqlLJiYmdQ7N1SsfDdfqgj6xSbrDhUA"
+      - "sk-ws-H.ILEXIM.z0W0.MEYCIQC_cIhtP3PuXcv2FAEh2RnROFnquIJ4b77joTYH9PY3ZwIhAPOfwyScVNmWOSljgd3ISNIQz624K9BdVrEU-DxAziE3"
+      - "sk-ws-H.ILEXII.8KS7.MEYCIQDpHGlS2p5R3oQZANbjtHAgOoU0sIN3msF_koWV3grpjwIhAKRGk0aUtC9D2VEH9a4wJnELH4ypomyx8PB2BZZD3_md"
+      - "sk-ws-H.ILEXIE.yHTl.MEQCIGn9P39IyUp5g6SYYlUVLR0f_9wUXW4LUZ1al6p8wC3pAiAgM-lAekRZccgOV8xuTIrKlrqJpARvqpbefHxbwHv-5w"
+      - "sk-ws-H.ILEXLL.6vMC.MEUCIDN9KoDMaLbe1Jvcle1Szfq7MKr60iGrn9QQGapEEy2CAiEAoMVnn4RXip13NM1Wk_n9_b59Qq_GE-LO0uewsfWO1-Q"
+      - "sk-ws-H.ILEXLR.Ch0G.MEQCIEGmp69LSiJQvkOCGqbXMbq4JtJe12ivGpmYxb8flTTvAiAtaNLNyP0Nbpeaag9b41j5COYkZCMebLxVFCK9EYfolA"
+      - "sk-ws-H.ILEXLE.5nPw.MEYCIQDryd4Z0vFvaKuUI9SEBsQgHUumK7AlnQfcFHJmxCacUwIhAP_CNiI3mXhcfGMMMeDoXoAHsSZKsnh-ry37qA7TzU4v"
+      - "sk-ws-H.ILEXLP.WV5e.MEUCIQCC-ZzWi05xDMMxWEqjotnC3_-T58ish_VV2N3hiPgmiQIgMQ3-YgzdD66UQTSarB74hMekebnjMRBEX1poYmbHaB0"
+      - "sk-ws-H.ILEXRH.z9fh.MEYCIQDb_xsIKp5xt7awD-pWyJMTLszk6AjbgFn2g-gizK3twAIhAJDOA0PLnLYHxtdYbaj_XDtoKHpk10_oxbl_uX0sr0gG"
+      - "sk-ws-H.ILEXRL.B9BA.MEQCIA7DAQoyaRCJTp7Sn8YPiIJcQozA7C1cFu1OmjvZrrNUAiARIRyXXTqVmG6N2GJ05MaCLHCpQbqR6CQ30k9jKrjS9Q"
+      - "sk-ws-H.ILEXRY.dsOt.MEQCID079B8Xn4yT-NHLSC1qqkM6v0-xtsvJLtjQ8MjpGTQMAiA-wW5OS1Ro1yWp3IKP6fDTVmi6K4yNYhujNm1273hoqg"
+      - "sk-ws-H.ILEXEM.9evf.MEUCIQCyBiAvtcccvFF5P2hcx80jPv8KFiRxgDmVbMKpMRIs0AIgPY9O718FZNF14I2r_MDA--dKLhhNJRWIk1aUPLDz7GA"
+      - "sk-ws-H.ILEXEL.fahv.MEYCIQDa4BT4p8qY_M_DZss-8O_6eCH9dBd2zupPPny-9f1C3AIhAPNVZqDh5bydgmQfq7TY7I0H_dgyYuUwmGQL9thCUkIZ"
+      - "sk-ws-H.ILEXEP.4b7v.MEUCIQD3UddEV100NYNtagP_d06JLe37D8tpdv-cT3Lx-d2QBgIgR_XcRoF4sINEWey1ohnW0ux4xmTR928AEvac-KvGO1A"
+      - "sk-ws-H.ILEXPE.7Ob1.MEUCIQD5hyzdoBwM8YTUhKonT5jhM51ZsSYxA_68qmcQSnHHnwIgdwTmACk78UyDFnj2oB2VK3BzfRfoQIv-562zFPqGraY"
+      - "sk-ws-H.ILEXPY.E7Cu.MEQCIDo9zQbUxrlb-xA4LvmDN8uvQoeV2tvs056H84noJPS_AiBi74Yk6qc8gT2WjQUWuKTG0U6TGFlBRbW9jl318BHvcg"
+      - "sk-ws-H.ILEXYL.wseE.MEUCIGaF7L4dbUPVOqIk1ZU6ARkG1H9DUuPIaBSQE5XMwxHOAiEA5O0GrMmvH08qPUNq1tqUIOSn2ycEwHqpnNEcQTFloko"
+      - "sk-ws-H.ILEXYR.e10h.MEQCIBV783wO_5cdSG2DvhxF8wVCpX2UoF27gXZIfGuhyImuAiBBpJ3FnAy9IZTsDJDpqvUAwtf1GDtllZkU8akEAHmE6g"
+      - "sk-ws-H.ILEXXD.n87i.MEUCIQCuDxcqkbfpg_hFOPvUan_zalxyxsu8bgvJsQIz17l9gAIgbVQhZLcoHR4r8qUZ76O2MbtkCgDAVzSPS-RWbvzPWQQ"
+      - "sk-ws-H.ILEXXI.FbXK.MEUCIQCvXfTaSGx_sYLoBgHjLrwgve08eCtSldUIHLCwZes3zQIgB1H6V-7XE9KeC9LYlPqV_o3as7--CWcvmyyhoEb7I7E"
+      - "sk-ws-H.ILEXXY.p8PL.MEQCIHCy2OKjS1oQBhUNF0vhw9I-OoWKrhlhnMcUGvtFYUrlAiBxl2hrYZAYtd7ddKpe1Z2lId7nBwziJ77TODXqaeqmQA"
+      - "sk-ws-H.ILPMMM.3bzs.MEUCIQCzQ3KXp7I-la_VXDoai6XgzOF4p1SHUNMaBHIRsrGT7QIgHeku-huPFgQIFk0r9Dhs1QXu6EmoA9Fo_NtJcPGQANU"
+      - "sk-ws-H.ILPMMP.HB1S.MEQCIEXV7NlyWW9t4qfEOlghqmbMwAjND-OSB5XzA_8-sWt6AiAFitnDK0oUTUN8vrEx0YR-pGXYs9IRhxAFtXNgbcsKvg"
+      - "sk-ws-H.ILPMDM.jZ9x.MEUCIQDkZ01MAOZ807jE1xH7mZzUGFSwOZvrzJdWPa9iSkZt5gIgMn3WkIkmjSy2QE2B05TlijU0VxYIeHylApP0bnUkkXs"
+      - "sk-ws-H.ILPMDI.jxmN.MEUCIC50b98umogcR2kvp09JC18PnPuztJnctjMSLqpvrzlHAiEAnR6UL9jv0e61ozo8uarBbYmnwDG4cvo_f6rhZEp3ZqU"
+      - "sk-ws-H.ILPMDL.GEVr.MEUCIQD2wxkhyZpeSyYu20G18Yc5bGf_gsq1J8_UB7AJH-JZIwIgV-GTW5xa3L8tlNCc6EgPN_p97Xg19BHCpy2p211oqjY"
+      - "sk-ws-H.ILPMDX.82j1.MEUCIQC4vSNh8gKp5mxOHPfTR9tEAPRdiCFeEdJr5gS_8E_khwIgDRDf_lewigguOOcoepDznk5CWZ5nPNhFI9wRPfqaivE"
+      - "sk-ws-H.ILPMHI.EyKL.MEUCIQDBO6aDfIQOoZW__dZnKGVrxoyx6d5B1qkqkjz9fJSWTQIgCHex9dyYjuWNaEdFz0JwU6DbGNM_pUrSTVU_tTSsDNQ"
+      - "sk-ws-H.ILPMHY.QF5N.MEUCIG8D0hib4Tya6p76wv_K7pweCosmZXvraSJp660KFrSFAiEA16G1p3q3lwxzuGYyP7tlvw-McbM_Ry7Ch8-DXlePEIw"
+      - "sk-ws-H.ILPMIM.r2FI.MEUCIQCGXtkVKD5KKsZQjQDD0mxRoipYs3ARrJCNhPe0AGi1egIgP7BC94UKd6RmzwaKq9qTE9Fu0wBwswFa2KAgs5if3O4"
+      - "sk-ws-H.ILPMIY.XhRV.MEQCIFD9g492pvgxHcUZPOWD3aX85XSEavY4omRkoZzYj_7mAiAqcMUAR7huV2xZskltZbwTpDJrNSgTjZlBGz25uqha4Q"
+      - "sk-ws-H.ILPMLM.ZVKf.MEUCIQCE--hXGHbNQrg9ycKVVkzsTW5-STyKMhd0ONNyfP95IAIgU0ofvx3DU7FiAOwwOizhKzioFxCQKq1d9s6oujP6HxQ"
+      - "sk-ws-H.ILPMLL.8i3o.MEUCIFo-Cr3pN-cbcbgbBF71js8iX4_g0cDHObc_9bHpT1WAAiEAqe0dXl9gxilkajgusbtX9tH3CXMsgOLoRgWxc6bK_34"
+      - "sk-ws-H.ILPMLR.VYLA.MEYCIQDCNVocwGzy17GMoFKQS3EOR8b_mrXyrK0a7EO4Abz_RwIhAJhD-vV8WSL_0ts4FpMXZwvhNbXUVmf0P6ojxsaIRKls"
+      - "sk-ws-H.ILPMLP.bgdh.MEYCIQCkrY51_zoQVvabNax6q6qUmVtg1oNMQt8zQcl98GNBhgIhAP2Ezs5x7CQjesXQ2m6fXRaTaS9iMs9AbtFNuOsHyte-"
+      - "sk-ws-H.ILPMRD.iMRz.MEYCIQCHsHDvdv2P1vPpB5V5mNsAIf0O65rZuoyT1mZzsqnGWgIhAPZ5SD1ZDBwOCcHWvX_I5IPlETpfX_1KF1lDpvPWI6p3"
+      - "sk-ws-H.ILPMRL.P5qP.MEUCIQDtfHj_P_4MqlP83badFELpe2ipD4BGWXHi67GKa13LGgIgOJ5slVeF4ZlSgVfHxBIzFA0rKbc_AcVhaAmjnP0L0QA"
+      - "sk-ws-H.ILPMRP.VCEC.MEUCIDaR1R0V9qGPFcojDrX0Z2HUKH_ge8PX0trZQv0Bz1ECAiEA2c_tJgSvocbxcVUhB2-GcbySWr0betU4XMLe8XSVcUE"
+      - "sk-ws-H.ILPMED.446c.MEUCICq8W7inWo_uZi2D__wZoeL5kzUygF1VKP1J-U5MRajdAiEAu6i0S-eeaG6QglwfH0Zqkh--tkSUWda_mcvJE6bTmtc"
+      - "sk-ws-H.ILPMEL.NGIr.MEQCIEEdrtG_USqO55TcNim_z05kKLb5wgKkX6NpgPKrXu2XAiBzeIimZCTbAizz2z1oTXcmyEklC6Mqfpc3K5Jr8hX7fQ"
+      - "sk-ws-H.ILPMEE.V7ZP.MEUCIGz0JElzrLM0MfN4wRoFH0s1cEKGMJH5fpmJFtYfGhnQAiEAwCAL3rQByHRpU9iroWa1guZNT8vlWH2lFvh_PwRMFsQ"
+      - "sk-ws-H.ILPMPM.fIYP.MEQCICGZOcrZ7y42Vqjvelysn7eCYtM1GF7aTsDG1ADtli9bAiAaXJ2HgMgV4EihMUe8FJSXWxrQ_hOf6_UjPDZvymAjcw"
+      - "sk-ws-H.ILPMPR.WQPu.MEUCIQCFeC3Jn5L4zOGEovka3UPOhfDK1ea9L8XsP6gZL7HMPQIgJmiUkCVUIIuxxQVv7zSARYQwCvVPyAub5J-G6vINLjA"
+      - "sk-ws-H.ILPMPY.pmbJ.MEUCIGp1QGCXkNQ8B4tIv-N9_vsMcXQDp52RrFi3zwEGrtxJAiEAuncDp2wY2nH_CoABootRbBS8jAee9ZGFhB3H37G4MrI"
+      - "sk-ws-H.ILPMYR.A6vF.MEUCIQDhwwDVSUlVEyX7EWxglnNXt2r1r_Wp6eECDIJgLb1BRwIgB84-I1bX56n8EKpzQQ99sVN5gexiRkGZlt5vTM5lDXY"
+      - "sk-ws-H.ILPMYY.Cb8p.MEYCIQCDZwotPhtTmba5bCNxpP3J8akS0Avw_dU366_Ljho3RgIhAME8n4xUZDgjuT8F_e81hvYWmdWNOVsmUZXbh4jbsHm7"
+      - "sk-ws-H.ILPMXM.AZfl.MEQCIDMFJSHZCjpHbRmbKetMoFAQRMH6to12BlLBUI-NS1wXAiBpBeFOpi5qDthnl6RXzjqvwZ_6r6VZZUwImimsLBtp3g"
+      - "sk-ws-H.ILPMXI.9Q1v.MEUCIQDo87Z80I_40mVoz1H-4M-avY3fBdInzgRp_sE95fqCZgIgNuZErFvFq9uDhHWkkQOQDpoCpejbcD9YslcGVrUeRBs"
+      - "sk-ws-H.ILPMXP.q0eB.MEUCIQDRV2AohXXk_chgx5yBw0_wCg7w1tJ8C-CWdnOW1ux7xQIgTgcdv_ZyYhiGJGLTUVEVd_CgONipWnkP3iajDFuJvC0"
+      - "sk-ws-H.ILPDMD.ZPoR.MEYCIQDAhhAeaey0RAV8om1Kj3dKypGfciMBcXZixD110q8KPAIhAM4qnih8afvUBVVLTXIm9PUiRNwyL_6m3I64Ftj5JK7C"
+      - "sk-ws-H.ILPDMY.ehVO.MEYCIQDrsUy2MINrn5Ws9pK3qIH8OVRlMNDCYwDfwfeW4EqjTwIhAMeHR6NrDfUr5zm2a4scn6-gR0Ka9S6k6obYUHAO8riF"
+      - "sk-ws-H.ILPDDM.VxS4.MEUCIQDDodOPnFsz4c4tCWN_wTYGXEVO7Ya0gSzpzl4h9uWR5wIgFya4ydY3q0KJIKPZ2wsVjgw3gKJwjj9yEnySufWAwWQ"
+      - "sk-ws-H.ILPDDH.InS9.MEUCIHExqtC57lQkgaDwVG1Nx3r3yw9CVuiuHXA33vNHU_IjAiEAhss8hp63Lz71PTOvMOQxvRpjXrquWEZeRBz6qZCislY"
+      - "sk-ws-H.ILPDDY.OjhW.MEQCIHmLRZf_OTXJR_a50wOC3CFss3tJ3ulM9jxIRueBn-XoAiBPcA2lfAdZx9Rn_SwWUv7f8GE-BhujOCog_PjKBXYnoQ"
+      - "sk-ws-H.ILPDHL.nDnu.MEQCIBctxKEEtEmmtx_WC_T2Dw_1mAxoAHh-EP7LYxJ6Ic5vAiB0xoaSBH6afU5DwiTlMZuS6F39WQ5_bK25a8lFDBEiuA"
+      - "sk-ws-H.ILPDHE.Kuq6.MEUCIDCoH_xunx4lCFoDfhRYjCX9O792-h-P-13GkV-1pGBqAiEA0rtL3fnmjBosZZhaIbid9-Pb16TBK_RlfYgQeHGQTsM"
+      - "sk-ws-H.ILPDIP.fn6y.MEYCIQCzkvWX4WRss1mlk9YUwOIS6-y3zt900hFxMUNI7HY6wAIhAJ3t5QUxRbTojRs-I0pd0dC7_eQacOqkBwwqTByj7zi5"
+      - "sk-ws-H.ILPDLR.l07Y.MEQCIFi1pXIdQ7jGOme2HgMQdiSfN3vdbogCc2Y9HWxnsKUNAiAa_0DeJ_gk4-J0gU_vG4pCE_s-MGwn49dYAR9UqZIDNQ"
+      - "sk-ws-H.ILPDLE.AtJT.MEQCIEDiPGA53dzK3wK0WFi-BLTYtTPbmK9w6CsIz0U6y6nvAiBFl-laOpTvSsDWdg4ncZPOTtbbkcFTkNvyI8bxlchqxw"
+      - "sk-ws-H.ILPDRR.Sx4l.MEQCIAIvFHPRnwgnFXBUvkAkwCxB8YZ98FK0bbCRQbtN1GdXAiALH9yaMvV71rdH0q57oGoVjf-7aoo9fFHU6l0CPVyfYg"
+      - "sk-ws-H.ILPDRE.kY7h.MEYCIQCIH5cZe-d42qCCu6iqhTo9cku8QsjmTJSDhEcQXnk_jgIhAJ8z-M8Mt75qXLHUhsZViartAxO1nHvio8ffIbz4-fmV"
+      - "sk-ws-H.ILPDEP.EQwb.MEUCIQDd0PbbIVgy6o14gmBHB4Un5_Xd3xEyofn8RCDDn_nVFwIgUHB-3el9m0hdZzhrxWyB9YGXN5bzBY2IXL-0NHGf_xI"
+      - "sk-ws-H.ILPDPM.1TFr.MEUCIBSCKSbSy2KiNJmLp5dxHGPAjvS83VhsMVSTrpkvacYuAiEA1XPyarxJnpZxdYNv7DHHUFPC4EqQw06raMScB6QVDs8"
+      - "sk-ws-H.ILPDPR.W12S.MEUCIFtFjQYnya_HqKnMXJ1VyO8FSmta3Z3y-NGLunulJFBXAiEAlpgzUl3xvkohCJl6h2YOKY982YOOXFaxP0szNlBOCPY"
+      - "sk-ws-H.ILPDYI.bePP.MEUCIAdZ8gMCraMHgBymm5QWYK8diXlZlWqzQljTbTarMAgjAiEAw62vgU5OnfARGIM3a5yiuij0wH6X-Dg3MTL90opZiII"
+      - "sk-ws-H.ILPDYP.Etbw.MEUCIFc-bqgWFkuzDYIjSHRwCWo3mHYcEFri4IxgnDFeOJDwAiEAjy8BCNT8FhKSU9miRDOTOam7iVMiOQO7OU_3MlUnRrg"
+      - "sk-ws-H.ILPDXM.ktQa.MEUCIH3AtamcQMLLvgJiT9BF0IOy0NzxxSWQ6TAGaix_gc6PAiEAubxHxXxadMCvRUeYN2wURX5HsCjb5RwuQR1jxmxig8I"
+      - "sk-ws-H.ILPDXL.mEd5.MEYCIQD-HYJ73HFP2KdprP76fcY9xq57y3xqaqmvR-gg19HDmAIhAJnL11one2apRIVk7C9DvtHrsRE5SdeRmWKK4P_mxQpC"
+      - "sk-ws-H.ILPDXX.QmPy.MEUCIQDG1OC7T8V922Nyey16AtQ2GsDBwEBDxbg1wHRVtpTykQIgXqB6x-l4FdOb9ZA4lFoKe9cj_KTeYofcMq5LBIbpW5E"
+      - "sk-ws-H.ILPHMD.h02n.MEYCIQCsZdiZmWBbgYLHXEDLXb_HzCvxT6vyRzAvC917tcP9zAIhALpXVMaMGwNcMUne-ZNZbQiMz3X2ljnD_Q8ktGaj8QC0"
+      - "sk-ws-H.ILPHME.nawU.MEYCIQCrmxRT7SvkXrEHJcyO8LzA8NeGIh4NzTrX7iu0P6UCygIhAMGmJbuOmA0bJb9Sig5N8xXU8byxE8ke1V2VslnKeS9Y"
+      - "sk-ws-H.ILPHMX.1UHu.MEYCIQC7iJDpCDgTrrOL-2nUqVkQgyg0NAgvAZ95FN1ezDq6JQIhAIowSv7cX0DvOG-81z3BDWmSg9WUz5uSdR22htfh3ASF"
+      - "sk-ws-H.ILPHDR.cBck.MEQCIGX_uCLXR0w_UsU8tHtDb7rcp5GTBAG8maoguLHfYaWnAiBEkqThPCtQMgFYjSHW8MCESHV3ikCPzs9yEdgINfSdiw"
+      - "sk-ws-H.ILPHHM.N2lh.MEUCIQCplaTdjugD0eX2DZUnh7sqlNlvmTopKeU-HGQOPQPhBQIgSscj8fQgcbR7auuHWvoKL0lJiUkAJ5GecFTp0tj2Ez0"
+      - "sk-ws-H.ILPHHI.oFjf.MEUCIQCtX8abmBndm6lspk-mwbw4TgSqbLEIzwlQtl7J5eavmgIgBC5PwqBmwtDBYLALPl4ffVFXKg8sb0FKxr_2xcagBLc"
+      - "sk-ws-H.ILPHHY.E8Kx.MEQCIELCxCjDxNbDq4MMx4nCOC1yFVXnPBPPpzoLeYbm575tAiA4KvJaybE4R4EKiKln5vci7JlqcCT2CutBAWdVgH40RQ"
+      - "sk-ws-H.ILPHIM.TdsR.MEUCIFDTJaZdEzfXzcuy4wGCjpqmAIlj6iYeskdrRV8E9xPUAiEAtp5i7n_FZT9UvNy0m1_jrebWcnUSWe_qTAhy9F6qT7E"
+    allowed_models:
+      - "aliman/glm-5.1"
+      - "aliman/deepseek-v4-flash"
+      - "aliman/deepseek-v4-pro"
+      - "aliman/qwen3.7-max-2026-06-08"
+    model_prefix: "aliman/"
+    enable_thinking: true  
+    reasoning_mode: "openai_reasoning"
+    reasoning_effort: "xhigh"    
+    key_selection_strategy: "first"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 1440000
+    global_rate_delay: 9
+  agentrouter:
+    base_url: "https://agentrouter.org"
+    keys:
+      - "sk-JBlyI2gPWnqSN3MqKMYwyCxh4Q91iJewuZSwkRkpFZJ8erlO"
+    upstream_format: "anthropic"              # ← this triggers the translation
+    upstream_messages_path: "/v1/messages?beta=true"  # endpoint on agentrouter
+    model_prefix: "agentrouter/"# stripped before sending upstream
+    inject_billing: true                     # inject billing header into system prompt
+    default_max_tokens: 4096                 # when client doesn't specify
+    allowed_models:
+      - "agentrouter/glm-5.1"
+      - "agentrouter/deepseek-v4-flash"
+      - "agentrouter/deepseek-v4-pro"
+    # ─── Standard proxy settings ────────────────────────
+    key_selection_strategy: "round-robin"
+    key_selection_opts: []
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 3
+      # ─── Optional: override fingerprint values ──────────
+    fingerprint:
+      user_agent: "claude-cli/2.1.145 (external, sdk-cli)"
+      anthropic_version: "2023-06-01"
+      stainless_os: "Linux"              # change if needed
+      billing_header: "x-anthropic-billing-header:"
+      # ─── Optional: add any extra headers ────────────────
+      custom_headers:
+        cc_entrypoint: "cli"
+        x-app: "cli"
+        x-stainless-arch: "x64"
+        x-stainless-helper-method: "stream"
+        x-stainless-runtime-version: "v24.15.0"
+        x-stainless-runtime-version: "node"
+        x-stainless-timeout: "0"    
+# Proxy settings for outgoing requests
+
+  kirochina:
+    base_url: "http://127.0.0.1:8765/v1"
+    keys:
+      - "sk-7bcb52f8f04547cf89fef15db4f5c5a5"
+    allowed_models:
+      - "kirochina/auto"
+    model_prefix: "kirochina/"
+    key_selection_strategy: "first"
+    key_selection_opts: []
+    enable_thinking: true
+    reasoning_effort: "high"    
+    public_endpoints:
+      - "/models"
+    rate_limit_cooldown: 14400
+    global_rate_delay: 7
+      # ─── Optional: override fingerprint values ──────────
+requestProxy:
+  enabled: false # Set to true to enable proxy
+  url: "socks5://username:password@example.com:1080" # Proxy URL with optional credentials embedded

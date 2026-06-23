@@ -22,6 +22,9 @@ from protocol_adapter import (
     AnthropicMessageAggregator,
     OpenAIToAnthropicSSETranslator,
     build_anthropic_headers,
+    deduplicate_anthropic_tool_use_ids,
+    deduplicate_kiro_conversation_state,
+    deduplicate_openai_tool_call_ids,
     translate_openai_to_anthropic,
     translate_anthropic_to_openai,
     translate_request,
@@ -33,6 +36,7 @@ from protocol_adapter import (
     _random_hex,
 )
 from gemini_adapter import (
+    deduplicate_gemini_function_call_ids,
     translate_openai_to_gemini,
     translate_gemini_to_openai,
     translate_anthropic_to_gemini,
@@ -677,6 +681,10 @@ async def proxy_endpoint(
 
         if request_body is not None:
             request_body = normalize_request_body_for_provider(provider, request_body)
+            # Deduplicate tool_call IDs in conversation history (Kiro/Bedrock phantom block workaround)
+            request_body = deduplicate_openai_tool_call_ids(request_body)
+            # Deduplicate Kiro conversationState toolUseId values (Bedrock TOOL_DUPLICATE workaround)
+            request_body = deduplicate_kiro_conversation_state(request_body)
             body_bytes = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
             is_stream = bool(request_body.get("stream", False))
             if is_stream:
@@ -944,6 +952,17 @@ async def proxy_anthropic_with_httpx(
         except (json.JSONDecodeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid JSON body")
 
+    # Deduplicate tool_call IDs in OpenAI request history
+    request_body = deduplicate_openai_tool_call_ids(request_body)
+
+    # DEBUG: verify dedup ran
+    _debug_ids = []
+    for _msg in request_body.get("messages", []):
+        if _msg.get("role") == "assistant" and _msg.get("tool_calls"):
+            for _tc in _msg["tool_calls"]:
+                _debug_ids.append(_tc.get("id", ""))
+    logger.info("[DEBUG] After dedup, tool_call IDs: %s", _debug_ids)
+
     # Translate request
     try:
         billing_hdr = str(provider.fingerprint.get("billing_header", "")) if provider.fingerprint else ""
@@ -958,6 +977,16 @@ async def proxy_anthropic_with_httpx(
         raise HTTPException(status_code=400, detail=str(e))
 
     anthropic_payload = json.dumps(anthropic_body, ensure_ascii=False).encode("utf-8")
+
+    # DEBUG: verify translated anthropic tool_use IDs
+    _debug_aids = []
+    for _msg in anthropic_body.get("messages", []):
+        for _block in _msg.get("content", []):
+            if isinstance(_block, dict) and _block.get("type") == "tool_use":
+                _debug_aids.append(_block.get("id", ""))
+    logger.info("[DEBUG] Anthropic tool_use IDs: %s", _debug_aids)
+    if len(_debug_aids) != len(set(_debug_aids)):
+        logger.error("[DEBUG] DUPLICATE DETECTED in Anthropic output!")
 
     # Determine upstream URL
     messages_path = provider.upstream_messages_path or "/v1/messages?beta=true"
@@ -1053,20 +1082,31 @@ async def proxy_anthropic_with_httpx(
         is_responses = is_responses_path(normalized_path)
         event_name = ""
         data_lines: list[str] = []
+
+        def _emit(chunk: dict[str, Any]) -> list[bytes]:
+            parts: list[bytes] = []
+            if is_responses:
+                for resp_chunk in _openai_chat_chunk_to_responses(chunk):
+                    parts.append(f"data: {json.dumps(resp_chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
+            else:
+                parts.append(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
+            return parts
+
+        def _emit_with_pending(chunk: Optional[dict[str, Any]]) -> list[bytes]:
+            parts: list[bytes] = []
+            if chunk is not None:
+                parts.extend(_emit(chunk))
+            for pending in decoder.drain_pending():
+                parts.extend(_emit(pending))
+            return parts
+
         try:
             async for line in upstream_resp.aiter_lines():
                 line = line.rstrip("\r")
                 if not line:
-                    # Process accumulated event
                     chunk = decoder.process_sse_lines(data_lines)
-                    if chunk is not None:
-                        if is_responses:
-                            resp_events = _openai_chat_chunk_to_responses(chunk)
-                            for resp_chunk in resp_events:
-                                yield f"data: {json.dumps(resp_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
-                        else:
-                            output = f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                            yield output.encode("utf-8")
+                    for b in _emit_with_pending(chunk):
+                        yield b
                     event_name = ""
                     data_lines = []
                     continue
@@ -1076,16 +1116,10 @@ async def proxy_anthropic_with_httpx(
                 if line.startswith("data:"):
                     data_lines.append(line[5:].lstrip())
 
-            # Process any remaining data
             if data_lines:
                 chunk = decoder.process_sse_lines(data_lines)
-                if chunk is not None:
-                    if is_responses:
-                        resp_events = _openai_chat_chunk_to_responses(chunk)
-                        for resp_chunk in resp_events:
-                            yield f"data: {json.dumps(resp_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
-                    else:
-                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+                for b in _emit_with_pending(chunk):
+                    yield b
             yield b"data: [DONE]\n\n"
         except Exception as e:
             logger.exception("[%s] SSE translation error", provider.provider_id)
@@ -1240,6 +1274,9 @@ async def handle_anthropic_messages(
         if provider.model_prefix and request_body.get("model", "").startswith(provider.model_prefix):
             request_body["model"] = request_body["model"][len(provider.model_prefix):]
 
+        # Deduplicate tool_use IDs in conversation history (Kiro/Bedrock phantom block workaround)
+        request_body = deduplicate_anthropic_tool_use_ids(request_body)
+
         # Always force stream: true upstream (AgentRouter/Anthropic requires it)
         request_body["stream"] = True
         body_bytes = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
@@ -1363,6 +1400,8 @@ async def anthropic_messages_endpoint(
 
         # ── Upstream is OpenAI format ───────────────────────────────────
         if provider.upstream_format == "openai":
+            # Deduplicate tool_use IDs before translation
+            request_body = deduplicate_anthropic_tool_use_ids(request_body)
             # Translate Anthropic → OpenAI
             try:
                 openai_body, model_name = translate_anthropic_to_openai(
@@ -1479,7 +1518,10 @@ async def anthropic_messages_endpoint(
             # Strip model prefix before sending upstream
             if provider.model_prefix and request_body.get("model", "").startswith(provider.model_prefix):
                 request_body["model"] = request_body["model"][len(provider.model_prefix):]
-                body_bytes = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
+
+            # Deduplicate tool_use IDs in conversation history (Kiro/Bedrock phantom block workaround)
+            request_body = deduplicate_anthropic_tool_use_ids(request_body)
+            body_bytes = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
 
             messages_path = provider.upstream_messages_path or "/v1/messages"
             if "?" in messages_path:
@@ -1581,8 +1623,8 @@ async def proxy_openai_to_gemini(
         except (json.JSONDecodeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    print(f"=== OPENAI REQUEST TO GEMINI TRANSLATION ===")
-    print(f"INCOMING OPENAI: {json.dumps(request_body, indent=2)}")
+    # Deduplicate tool_call IDs before translation
+    request_body = deduplicate_openai_tool_call_ids(request_body)
 
     try:
         gemini_body, model_name = translate_openai_to_gemini(
@@ -1599,11 +1641,6 @@ async def proxy_openai_to_gemini(
     upstream_url = f"{provider.base_url}{generate_path}"
 
     gemini_payload = json.dumps(gemini_body, ensure_ascii=False).encode("utf-8")
-    try:
-        print(f"OUTGOING GEMINI: {gemini_payload.decode('utf-8')}".encode('cp1252', errors='replace').decode('cp1252'))
-        print("============================================")
-    except Exception:
-        pass
 
     await provider.request_pacer.wait()
     client = await get_async_client(request)
@@ -1686,6 +1723,9 @@ async def proxy_anthropic_to_gemini(
     is_stream: bool,
 ) -> Response:
     """Proxy Anthropic Messages request to a Gemini upstream."""
+    # Deduplicate tool_use IDs before translation
+    request_body = deduplicate_anthropic_tool_use_ids(request_body)
+
     try:
         gemini_body, model_name = translate_anthropic_to_gemini(
             request_body,

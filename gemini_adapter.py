@@ -47,6 +47,74 @@ from protocol_adapter import (
 )
 
 
+# ── Deduplication ─────────────────────────────────────────────────────────────
+
+
+def deduplicate_gemini_function_call_ids(body: dict[str, Any]) -> dict[str, Any]:
+    """Deduplicate functionCall IDs in a Gemini GenerateContent request body.
+
+    Kiro/Bedrock emits phantom functionCall blocks with duplicate IDs and empty args.
+    When clients store these in history and send them back, Gemini rejects with
+    INVALID_ARGUMENT. This function re-assigns unique IDs to duplicates and patches
+    matching functionResponse references.
+    """
+    contents = body.get("contents")
+    if not isinstance(contents, list):
+        return body
+
+    seen_ids: dict[str, int] = {}
+    id_map: dict[str, str] = {}
+
+    for content in contents:
+        if not isinstance(content, dict) or content.get("role") != "model":
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            fc = part.get("functionCall")
+            if not isinstance(fc, dict):
+                continue
+            tid = fc.get("id", "")
+            if not tid:
+                continue
+            if tid in seen_ids:
+                seen_ids[tid] += 1
+                new_id = f"toolu_{_random_hex(12)}"
+                id_map[f"{tid}:{seen_ids[tid]}"] = new_id
+                fc["id"] = new_id
+            else:
+                seen_ids[tid] = 1
+
+    if not id_map:
+        return body
+
+    occurrence_counters: dict[str, int] = {}
+    for content in contents:
+        if not isinstance(content, dict) or content.get("role") != "user":
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            fr = part.get("functionResponse")
+            if not isinstance(fr, dict):
+                continue
+            tid = fr.get("id", "")
+            if not tid or tid not in seen_ids or seen_ids[tid] <= 1:
+                continue
+            occurrence_counters[tid] = occurrence_counters.get(tid, 0) + 1
+            map_key = f"{tid}:{occurrence_counters[tid]}"
+            if map_key in id_map:
+                fr["id"] = id_map[map_key]
+
+    return body
+
+
 # ── Schema helpers ────────────────────────────────────────────────────────────
 
 
